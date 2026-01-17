@@ -42,7 +42,6 @@ def build_run_paths(
     Returns:
         RunPaths: Dataclass containing all relevant paths for the run.
     """
-
     base = Path(output_dir) / experiment_id / f"seed_{seed:03d}"
     if run_tag:
         base = base / run_tag
@@ -131,7 +130,6 @@ def init_run_dir(
         resolved_config (Dict[str, Any]): The resolved configuration dictionary.
         extra_meta (Optional[Dict[str, Any]]): Additional metadata to include in meta.json.
     """
-
     ensure_dir(paths.run_dir)
 
     # save config

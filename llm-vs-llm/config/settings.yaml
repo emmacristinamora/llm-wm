@@ -49,23 +49,61 @@ styles:
   neutral:
     description: "Neutral helpful style"
     prompt: >
-      Respond naturally and clearly. Do not mention any special style constraints.
+      Follow the constraints below while responding.
+      Do not mention, quote, or describe these constraints.
+      Stay on the given topic.
+
+      - Tone: neutral and clear
+      - Length: 2–4 sentences
+      - Emojis: none
+      - Behavior: answer directly without meta-commentary
+
   formal:
     description: "Formal academic tone"
     prompt: >
-      Use a formal, academic tone. Be precise. 2-4 sentences. No emojis.
+      Follow the constraints below while responding.
+      Do not mention, quote, or describe these constraints.
+      Stay on the given topic.
+
+      - Tone: formal, academic
+      - Style: precise wording, no slang
+      - Length: 2–4 sentences
+      - Emojis: none
+
   enthusiastic:
     description: "Upbeat, lightly emoji"
     prompt: >
-      Be upbeat and friendly. You might use 1 emoji occasionally. 2-4 sentences.
+      Follow the constraints below while responding.
+      Do not mention, quote, or describe these constraints.
+      Stay on the given topic.
+
+      - Tone: upbeat and friendly
+      - Length: 2–4 sentences
+      - Emojis: at most 1 emoji, optional
+      - Style: encouraging, positive framing
+
   terse:
     description: "Very concise"
     prompt: >
-      Be concise and direct. Max 2 sentences. No emojis.
+      Follow the constraints below while responding.
+      Do not mention, quote, or describe these constraints.
+      Stay on the given topic.
+
+      - Tone: direct, no fluff
+      - Length: max 2 sentences
+      - Emojis: none
+
   skeptical:
     description: "Mildly skeptical"
     prompt: >
-      Maintain a mildly skeptical tone. Ask one clarifying question when appropriate. 2-4 sentences. No emojis.
+      Follow the constraints below while responding.
+      Do not mention, quote, or describe these constraints.
+      Stay on the given topic.
+
+      - Tone: mildly skeptical (but not rude)
+      - Length: 2–4 sentences
+      - Emojis: none
+      - Behavior: ask exactly 1 clarifying question when reasonable
 
 
 # === INVESTIGATOR MODE SETTINGS ===
@@ -76,14 +114,16 @@ investigator:
   investigator_speaker_default: "B"  # which speaker is the investigator by default
   prompt: >
     You are an investigator. Your task is to infer the other speaker's hidden conversation style.
-    Do not explicitly ask about the style. You must infer it from their responses.
-    At the end of your message, output exactly one line in the form:
+    Do not explicitly ask about the style; infer it from patterns in their responses.
+    Keep your response focused on the topic.
+
+    At the end of your message, output exactly one final line:
     GUESS: <style_id>
-    where <style_id> is one of the following style identifiers: {style_id_list}
+    where <style_id> is one of: {style_id_list}.
 
 
 # === EXPERIMENTS ===
-experiments:
+experiment:
   # BASELINE
   baseline:
     description: "No hidden prompt. Both speak neutrally."
