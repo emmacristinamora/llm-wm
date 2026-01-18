@@ -259,7 +259,13 @@ def generate_full_transcript(
     # experiment specific data
     styles_cfg = cfg["styles"]
     investigator_cfg = cfg["investigator"]
-    exp_cfg = cfg["experiment"][experiment_id]
+
+    if "experiments" not in cfg:
+        raise KeyError("Missing top-level key 'experiments' in config.")
+    if experiment_id not in cfg["experiments"]:
+        raise KeyError(f"Unknown experiment_id '{experiment_id}'. Available: {list(cfg['experiments'].keys())}")
+
+    exp_cfg = cfg["experiments"][experiment_id]
 
     # set random seed for reproducibility
     set_global_seed(seed)
