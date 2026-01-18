@@ -1,0 +1,36 @@
+TODO.txt
+
+Immediate fixes / cleanup
+- Add a scoring script that reads transcript.jsonl and computes NLL/logprobs while varying context length (k_turns_list).
+- Add a small “smoke test” configuration (2 rounds, 1 seed) to validate generation quickly.
+- Add stopping rules for generation (e.g., stop when the model starts writing “User:” / “Assistant:” again; add EOS handling; optional stop strings).
+- Switch to Qwen 3B locally or on HPC:
+  - set use_chat_template=true
+  - confirm apply_chat_template usage and special tokens
+  - ensure dtype/device_map settings work on cluster
+
+Direction A1: One generator + one scorer
+- Keep a single model as the generator (Model A) producing text from prompts (single-turn or controlled multi-turn).
+- Use Model B only to score A’s outputs (logprob/NLL).
+- Vary how much context is given to the scorer (k turns, full history).
+- Use this to answer: “Does context affect NLL? How and why?”
+
+Direction A2: Bidirectional scoring (symmetry / scorer-dependence)
+- Run the same generations, but compute both:
+  - NLL_B(A output | context)
+  - NLL_A(B output | context) or reciprocal comparisons on the same data
+- Compare whether context effects are symmetric across models or depend on the scorer’s inductive bias.
+- Use this to answer: “Is the context sensitivity an artifact of the scorer model?”
+
+Direction B (optional later): Full LLM-vs-LLM multi-turn chat (harder, higher risk of drift)
+- Allow both A and B to generate turns in a multi-turn dialogue.
+- Apply hidden-style schedules to A and optionally investigator mode to B.
+- Add stronger formatting constraints and stopping conditions to avoid degeneration.
+- Score surprise / NLL turn-by-turn as context grows.
+
+Cluster readiness
+- Add an HPC run script that:
+  - activates a prebuilt environment (do not recreate env each job)
+  - runs main.py with explicit args
+  - writes logs to out/ and err/
+- Add environment_hpc.yml tuned for the cluster (CUDA + torch build).
