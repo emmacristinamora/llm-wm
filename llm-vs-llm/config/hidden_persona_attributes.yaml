@@ -1,0 +1,82 @@
+# config/hidden_persona_attributes.yaml
+
+attribute_values:
+  base_persona:
+    conversation_goal: [seek_advice, learn, brainstorm, vent, debate, plan, get_quick_answer]
+    topic_anchor: [technology, health, travel, finance, relationships, career, education, hobbies]
+    domain_familiarity: [novice, intermediate, expert]
+    preference_for_details: [concise, balanced, detailed]
+
+  style_focused:
+    formality: [formal, neutral, casual]
+    warmth: [warm, neutral, cold]
+    directness: [direct, hedged, indirect]
+    structure: [structured, mixed, stream_of_consciousness]
+    trust_in_assistant: [skeptical, neutral, trusting]
+
+
+profiles:
+  base_persona_id: 
+    # TECH STARTER = seek advice on technology as a novice, balanced detail
+    bp_tech_starter:
+      name: tech_starter
+      conversation_goal: seek_advice
+      topic_anchor: technology
+      domain_familiarity: novice
+      preference_for_details: balanced
+    # CAREER BUILDER = brainstorm career ideas as intermediate, detailed
+    bp_career_builder:
+      name: career_builder
+      conversation_goal: brainstorm
+      topic_anchor: career
+      domain_familiarity: intermediate
+      preference_for_details: detailed
+    # TRAVELER = plan as intermediate traveler, concise
+    bp_traveler:
+      name: traveler
+      conversation_goal: plan
+      topic_anchor: travel
+      domain_familiarity: intermediate
+      preference_for_details: concise
+
+  style_id:
+    # FORMAL = formal, structured
+    st_formal:
+      name: formal
+      formality: formal
+      warmth: neutral
+      directness: direct
+      structure: structured
+      trust_in_assistant: neutral
+    # WARM = warm, supportive
+    st_warm:
+      name: warm
+      formality: neutral
+      warmth: warm
+      directness: hedged
+      structure: mixed
+      trust_in_assistant: trusting
+    # BLUNT = casual, direct
+    st_blunt:
+      name: blunt
+      formality: casual
+      warmth: warm
+      directness: direct
+      structure: mixed
+      trust_in_assistant: neutral
+    # SKEPTICAL = skeptical, precise
+    st_skeptical:
+      name: skeptical
+      formality: neutral
+      warmth: neutral
+      directness: direct
+      structure: structured
+      trust_in_assistant: skeptical
+    # RAMBLER = casual, stream of consciousness
+    st_rambler:
+      name: rambler
+      formality: casual
+      warmth: neutral
+      directness: indirect
+      structure: stream_of_consciousness
+      trust_in_assistant: neutral

@@ -26,6 +26,7 @@ model:
 
 # === GENERATION SETTINGS ===
 generation:
+# use temp 0 for deterministic, higher temp for more diverse
   max_new_tokens: 120
   temperature: 0.7
   top_p: 0.9

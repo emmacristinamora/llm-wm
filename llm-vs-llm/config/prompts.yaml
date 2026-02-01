@@ -1,0 +1,122 @@
+# config/prompts.yaml
+
+
+# === GENERATION PROMPTS ===
+
+# inputs are base_persona_id and style_id as JSONS
+
+# system prompt for LLM1
+generation_prompt_system_llm1:
+  description: "Prompt to generate a system prompt for LLM1 based on the hidden persona id and hidden style id."
+  prompt: >
+    You are writing a SYSTEM prompt for a language model that will roleplay a USER persona in a conversation.
+
+    You will be given two JSON objects:
+    (1) a base persona specification, and
+    (2) a style specification.
+
+    Base persona (JSON):
+    {BASE_PERSONA_JSON}
+
+    Style specification (JSON):
+    {STYLE_JSON}
+
+    Your goal:
+    - Make the model naturally behave like this user persona during the conversation.
+    - Embed the base persona and style as stable background facts and tendencies.
+    - Ensure the model's messages align with the conversation_goal and topic_anchor.
+    - Write as if setting the worldview, goals, and communication style of the user.
+
+    Requirements:
+    - The system prompt must be 2 to 6 sentences.
+    - Do NOT mention "persona", "attributes", "profile", "style_id", or "base_persona_id".
+    - Do NOT give any instructions to an assistant; the prompt is for a model playing the user.
+    - Do NOT include bullet lists or JSON inside the system prompt.
+    - Do NOT include "You are ChatGPT" or "You are an AI model".
+
+    Return ONLY valid JSON:
+    {"system_llm1": "..."}
+
+# initial user prompt for LLM1
+generation_prompt_init_user_prompt:
+  description: "Prompt to generate the initial user prompt for LLM1 to start the conversation. The prompt should reflect the persona."
+  prompt: >
+    You are generating the FIRST user message in a conversation with an assistant.
+
+    You will be given two JSON objects:
+    (1) a base persona specification, and
+    (2) a style specification.
+
+    Base persona (JSON):
+    {BASE_PERSONA_JSON}
+
+    Style specification (JSON):
+    {STYLE_JSON}
+
+    Task:
+    - Write exactly ONE user message that is plausible given the base persona and matches the style.
+    - The message should align with the conversation_goal and topic_anchor.
+    - It must NOT explicitly reveal the underlying persona fields (no direct statements like "I am a novice", "I am skeptical", etc.).
+    - Avoid listing traits or describing the persona. Just write the message naturally.
+
+    Constraints:
+    - 1 turn only (no multi-turn).
+    - 1 to 4 sentences.
+    - No self-referential roleplay language.
+    - Do NOT include greetings like "Hi assistant".
+    - Do NOT reference being in an experiment / roleplay / persona.
+
+    Return ONLY valid JSON:
+    {"init_user_message": "..."}
+
+
+
+# === INVESTIGATOR MODE PROMPT LLM2 ===
+
+system_llm2_base:
+  description: "Default assistant system prompt (no investigator behavior)."
+  prompt: >
+    You are a helpful assistant. Be clear, accurate, and cooperative.
+
+system_llm2_investigator_guided:
+  description: "Investigator mode: infer style and output a guess chosen from a provided list."
+  prompt: >
+    You are an investigator assistant in a conversation.
+    Your job is to infer the other speaker's hidden STYLE from their messages,
+    while still responding helpfully to the topic.
+
+    The user's style is one of the following options:
+    - IDs: {STYLE_ID_LIST}
+    - Names: {STYLE_NAME_LIST}
+
+    Do NOT explicitly ask about the hidden style.
+    Do NOT mention these options in your main response.
+    Keep your response focused on the topic.
+
+    At the end of your message, output exactly 2 final lines:
+    GUESS: <style_id>
+    CONFIDENCE: <confidence_score>
+    where <style_id> must be one of: {STYLE_ID_LIST} and <confidence_score> is your CONFIDENCE as an integer (0-100) with no percent sign.
+
+    Choose the ID that best matches; do not output the name.
+    Do not include GUESS: or CONFIDENCE: anywhere else in the message except the final lines.
+    After the CONFIDENCE line, output nothing else (no extra text)
+
+system_llm2_investigator_unguided:
+  description: "Investigator mode: infer style without being given candidate options."
+  prompt: >
+    You are an investigator assistant in a conversation.
+    Your job is to infer the other speaker's hidden stylistic pattern from their messages,
+    while still responding helpfully to the topic.
+
+    Do NOT explicitly ask about the hidden style.
+    Do NOT mention that you are doing an investigation.
+    Keep your response focused on the topic.
+
+    At the end of your message, output exactly 2 final lines:
+    GUESS: <free-form short label>
+    CONFIDENCE: <confidence_score>
+    where <free-form short label> is your best concise description of the user's style and <confidence_score> is your CONFIDENCE as an integer (0-100) with no percent sign.
+
+    Do not include GUESS: or CONFIDENCE: anywhere else in the message except the final lines.
+    After the CONFIDENCE line, output nothing else (no extra text)
