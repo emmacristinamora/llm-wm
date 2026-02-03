@@ -7,3 +7,9 @@ pyyaml>=6.0
 tqdm>=4.66
 matplotlib>=3.8
 openai>=1.0.0
+
+torch
+tiktoken
+sentencepiece
+huggingface_hub
+safetensors
