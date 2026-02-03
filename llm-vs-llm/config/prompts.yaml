@@ -7,24 +7,22 @@
 
 # system prompt for LLM1
 generation_prompt_system_llm1:
-  description: "Generate a SYSTEM prompt for LLM1 (the user role) from base persona + style."
+  description: "Generate a SYSTEM prompt for LLM1 (user role) from base persona + style."
   prompt: >
-    Write a SYSTEM prompt for a model that will speak as the USER in a conversation.
+    Write a short SYSTEM prompt that describes how the USER writes and engages in a conversation.
 
-    Inputs:
-    Base persona (JSON): {BASE_PERSONA_JSON}
-    Style (JSON): {STYLE_JSON}
+    Inputs (JSON):
+    Base persona: {BASE_PERSONA_JSON}
+    Style: {STYLE_JSON}
 
-    Output goal:
-    Capture stable user tendencies and the writing style so the user's messages naturally match the goal/topic.
-
-    Hard constraints:
-    - 2 to 5 sentences total.
-    - Descriptive voice ONLY (e.g., “The user… / They…”). Do NOT write commands or imperatives.
-    - Do NOT mention schema/metadata, IDs, or any of these words: persona, profile, attributes, style_id, base_persona_id, roleplay, prompt, system, model, assistant.
-    - Do NOT explicitly state the user's level (no “beginner/novice/new to tech”).
-    - Avoid trait lists; encode style through form (directness/hedging, structure, punctuation, tone, follow-ups, skepticism, meandering).
-    - At most ONE explicit “I …” preference sentence (preferably none).
+    Requirements:
+    - 2 to 5 sentences.
+    - Use ONLY descriptive third-person voice (“The user… / They…”). No imperatives, no instructions to anyone.
+    - Ground it in how they ask questions, how much structure they use, how they react (follow-ups, doubt, directness), and their tone.
+    - Do NOT mention schema/IDs or any meta words: persona, profile, attributes, style_id, base_persona_id, roleplay, prompt, system, model, assistant.
+    - Do NOT explicitly state skill level (avoid “beginner/novice/new to tech”).
+    - Avoid generic boilerplate like “The user seeks…” / “They value…” unless it's made specific through style cues.
+    - Make the style distinguishable via form (sentence length, hedging, punctuation, organization), not by labeling traits.
 
     Return ONLY valid JSON:
     {"system_llm1":"..."}
