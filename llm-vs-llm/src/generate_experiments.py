@@ -37,14 +37,14 @@ ATTRIBUTES_YAML = CONFIG_DIR / "hidden_persona_attributes.yaml"
 PROMPTS_YAML = CONFIG_DIR / "prompts.yaml"
 OUT_FILE = BASE_DIR / "experiments.jsonl"
 
-# If None: use ALL base personas in hidden_persona_attributes.yaml
-# Else: set explicitly, e.g. ["bp_tech_starter", "bp_other_1", "bp_other_2"]
-BASE_PERSONA_IDS = None
-
+# BASE_PERSONA_ID = "bp_tech_starter"
+# if None, use ALL base personas found in hidden_persona_attributes.yaml
+BASE_PERSONA_IDS = None  
 INVESTIGATOR_MODES = ["none", "guided", "unguided"]
 LIMIT_STYLES = None  # set to 2 for debugging
 
 # qwen model config
+# if your colleague used "Qwen/Qwen3-8B", keep it identical for prompt generation.
 MODEL_NAME = "Qwen/Qwen3-8B"
 
 # generation params
@@ -304,18 +304,6 @@ def generate_with_retries_qwen(
 # === 4) main generation ===
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default=MODEL_NAME)
-    parser.add_argument("--out_file", type=str, default=str(OUT_FILE))
-    parser.add_argument("--limit_styles", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=SEED)
-    parser.add_argument("--device_map", type=str, default="auto")
-    args = parser.parse_args()
-
-    set_seed(args.seed)
-
-    out_file = Path(args.out_file)
-
     # --- load configs ---
     print(f"[load] attributes from {ATTRIBUTES_YAML}")
     attrs_cfg = read_yaml(ATTRIBUTES_YAML)
@@ -326,9 +314,9 @@ def main():
     base_personas = attrs_cfg["profiles"]["base_persona_id"]
     styles = attrs_cfg["profiles"]["style_id"]
 
-    # --- choose base personas ---
+    # choose which base personas to use
     if BASE_PERSONA_IDS is None:
-        base_persona_items = list(base_personas.items())
+        base_persona_items = list(base_personas.items())   # ALL
     else:
         missing = [bid for bid in BASE_PERSONA_IDS if bid not in base_personas]
         if missing:
@@ -343,10 +331,7 @@ def main():
     style_ids = [sid for sid, _ in style_items]
     style_names = [sobj.get("name", sid) for sid, sobj in style_items]
 
-    print(
-        f"[config] base_personas={len(base_persona_items)} "
-        f"styles={len(style_items)} investigator_modes={INVESTIGATOR_MODES}"
-    )
+    print(f"[config] base_personas={len(base_persona_items)} styles={len(style_items)} investigator_modes={INVESTIGATOR_MODES}")
 
     # --- leakage controls ---
     banned_strings = collect_dynamic_bans(attrs_cfg)
@@ -379,7 +364,7 @@ def main():
                 base_persona_json = json_dumps_compact(base_persona)
                 style_json = json_dumps_compact(style_obj)
 
-                # generate llm1 prompts once per (base persona, style) (cache miss)
+                # generate llm1 prompts once per style (cache miss)
                 if cache_key not in llm1_cache:
                     print(f"\n[cache miss] generating llm1 prompts for {cache_key}")
 
