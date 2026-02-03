@@ -150,14 +150,6 @@ def collect_dynamic_bans(attrs_cfg: Dict[str, Any]) -> List[str]:
     bans.update(base_personas.keys())
     bans.update(styles.keys())
 
-    # ban name fields too (these can leak)
-    for obj in base_personas.values():
-        if isinstance(obj, dict) and obj.get("name"):
-            bans.add(str(obj["name"]))
-    for obj in styles.values():
-        if isinstance(obj, dict) and obj.get("name"):
-            bans.add(str(obj["name"]))
-
     return sorted({b.strip() for b in bans if b and str(b).strip()})
 
 
