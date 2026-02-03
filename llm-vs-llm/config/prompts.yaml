@@ -36,6 +36,14 @@ generation_prompt_system_llm1:
     - Do NOT mention any schema/metadata fields, IDs, or labels (e.g., base_persona_id, style_id, conversation_goal, etc.).
     - You MAY describe tone/behavior in natural language, even if it overlaps with common words in the JSON (e.g., “formal”, “direct”).
 
+    Additional constraints (important):
+    - Write as implicit behavioral guidance, NOT as a self-description or trait list.
+    - Avoid repeated "I ..." preference statements (e.g., "I prefer", "I like", "I want"). Use at most ONE such phrase total.
+    - Do NOT explicitly state the user's level (avoid phrases like "I'm new to tech", "beginner", "novice").
+    - Encode style via form: sentence length, punctuation, hedging, structure, and emotional tone—rather than explicitly naming traits.
+    - Make it usable as a system instruction: describe how the user tends to speak, ask, and react (e.g., asks follow-ups, challenges assumptions, rambles), without labeling it.
+    - Avoid meta-language like "roleplay", "prompt", "system", "model", "assistant", "persona", "attributes".
+
     Return ONLY valid JSON:
     {"system_llm1": "..."}
 
@@ -70,6 +78,14 @@ generation_prompt_init_user_prompt:
     - Do NOT mention any schema/metadata fields, IDs, or labels (e.g., base_persona_id, style_id, conversation_goal, etc.).
     - You MAY use normal tone words naturally; just don't expose the underlying schema or categories.
 
+    Style enforcement:
+    - Make the style obvious from phrasing (not by stating traits).
+    - If formal: use precise wording and structured phrasing; no emojis; minimal hedging.
+    - If warm: include a softener or appreciation (e.g., "thank you", "I'd really appreciate"); gentle tone.
+    - If blunt: keep it very short; imperative; no extra context unless necessary.
+    - If skeptical: ask for assumptions, tradeoffs, or evidence; include at least one caveat-style question.
+    - If rambler: include a short tangent or aside; slightly meandering; still ends with a clear ask.
+
     Return ONLY valid JSON:
     {"init_user_message": "..."}
 
@@ -89,9 +105,13 @@ system_llm2_investigator_guided:
     Your job is to infer the other speaker's hidden STYLE from their messages,
     while still responding helpfully to the topic.
 
-    The user's style is one of the following options:
-    - IDs: {STYLE_ID_LIST}
-    - Names: {STYLE_NAME_LIST}
+    The user's style is one of the following options.
+
+    Candidate IDs:
+    {STYLE_ID_LIST}
+
+    Candidate names (for your internal reference only):
+    {STYLE_NAME_LIST}
 
     Do NOT explicitly ask about the hidden style.
     Do NOT mention these options in your main response.
