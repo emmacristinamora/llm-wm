@@ -9,7 +9,7 @@
 generation_prompt_system_llm1:
   description: "Generate a SYSTEM prompt for LLM1 (user role) from base persona + style."
   prompt: >
-    Write a short SYSTEM prompt that describes how the USER writes and engages in a conversation.
+    Write a short SYSTEM prompt that sets how YOU (the user) write and engage in a conversation.
 
     Inputs (JSON):
     Base persona: {BASE_PERSONA_JSON}
@@ -17,12 +17,14 @@ generation_prompt_system_llm1:
 
     Requirements:
     - 2 to 5 sentences.
-    - Use ONLY descriptive third-person voice (“The user… / They…”). No imperatives, no instructions to anyone.
-    - Ground it in how they ask questions, how much structure they use, how they react (follow-ups, doubt, directness), and their tone.
+    - Use ONLY second-person voice (“You…”). No third-person (“the user”) and no first-person (“I”).
+    - Encode the style through observable writing habits: sentence length and pacing, hedging vs directness, organization, punctuation, and tone.
+    - Include at least ONE interaction habit (e.g., you ask follow-ups when unclear, you request examples, you challenge assumptions, you drift into side thoughts).
+    - Keep it about HOW you communicate and react; do not list traits or provide a biography.
     - Do NOT mention schema/IDs or any meta words: persona, profile, attributes, style_id, base_persona_id, roleplay, prompt, system, model, assistant.
     - Do NOT explicitly state skill level (avoid “beginner/novice/new to tech”).
-    - Avoid generic boilerplate like “The user seeks…” / “They value…” unless it's made specific through style cues.
-    - Make the style distinguishable via form (sentence length, hedging, punctuation, organization), not by labeling traits.
+    - Avoid generic boilerplate like “You seek…” / “You value…” unless immediately tied to a concrete linguistic cue.
+    - Your messages should naturally reflect the conversation goal and topic, without naming them.
 
     Return ONLY valid JSON:
     {"system_llm1":"..."}

@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import argparse
 import json
-import os
 import re
 import random
 
@@ -38,12 +37,14 @@ ATTRIBUTES_YAML = CONFIG_DIR / "hidden_persona_attributes.yaml"
 PROMPTS_YAML = CONFIG_DIR / "prompts.yaml"
 OUT_FILE = BASE_DIR / "experiments.jsonl"
 
-BASE_PERSONA_ID = "bp_tech_starter"
+# If None: use ALL base personas in hidden_persona_attributes.yaml
+# Else: set explicitly, e.g. ["bp_tech_starter", "bp_other_1", "bp_other_2"]
+BASE_PERSONA_IDS = None
+
 INVESTIGATOR_MODES = ["none", "guided", "unguided"]
 LIMIT_STYLES = None  # set to 2 for debugging
 
 # qwen model config
-# if your colleague used "Qwen/Qwen3-8B", keep it identical for prompt generation.
 MODEL_NAME = "Qwen/Qwen3-8B"
 
 # generation params
@@ -325,10 +326,14 @@ def main():
     base_personas = attrs_cfg["profiles"]["base_persona_id"]
     styles = attrs_cfg["profiles"]["style_id"]
 
-    if BASE_PERSONA_ID not in base_personas:
-        raise ValueError(f"BASE_PERSONA_ID={BASE_PERSONA_ID} not found in yaml")
-
-    base_persona = base_personas[BASE_PERSONA_ID]
+    # --- choose base personas ---
+    if BASE_PERSONA_IDS is None:
+        base_persona_items = list(base_personas.items())
+    else:
+        missing = [bid for bid in BASE_PERSONA_IDS if bid not in base_personas]
+        if missing:
+            raise ValueError(f"BASE_PERSONA_IDS contains unknown ids: {missing}")
+        base_persona_items = [(bid, base_personas[bid]) for bid in BASE_PERSONA_IDS]
 
     style_items = list(styles.items())
     effective_limit = args.limit_styles if args.limit_styles is not None else LIMIT_STYLES
@@ -338,8 +343,10 @@ def main():
     style_ids = [sid for sid, _ in style_items]
     style_names = [sobj.get("name", sid) for sid, sobj in style_items]
 
-    print(f"[config] BASE_PERSONA_ID={BASE_PERSONA_ID}")
-    print(f"[config] styles={len(style_items)} investigator_modes={INVESTIGATOR_MODES}")
+    print(
+        f"[config] base_personas={len(base_persona_items)} "
+        f"styles={len(style_items)} investigator_modes={INVESTIGATOR_MODES}"
+    )
 
     # --- leakage controls ---
     banned_strings = collect_dynamic_bans(attrs_cfg)
@@ -361,106 +368,107 @@ def main():
     llm1_cache: Dict[str, Dict[str, str]] = {}
 
     written = 0
-    total = len(style_items) * len(INVESTIGATOR_MODES)
+    total = len(base_persona_items) * len(style_items) * len(INVESTIGATOR_MODES)
     idx = 0
 
     with out_file.open("a", encoding="utf-8") as f_out:
-        for style_id, style_obj in style_items:
-            cache_key = f"{BASE_PERSONA_ID}__{style_id}"
+        for base_persona_id, base_persona in base_persona_items:
+            for style_id, style_obj in style_items:
+                cache_key = f"{base_persona_id}__{style_id}"
 
-            base_persona_json = json_dumps_compact(base_persona)
-            style_json = json_dumps_compact(style_obj)
+                base_persona_json = json_dumps_compact(base_persona)
+                style_json = json_dumps_compact(style_obj)
 
-            # generate llm1 prompts once per style (cache miss)
-            if cache_key not in llm1_cache:
-                print(f"\n[cache miss] generating llm1 prompts for {cache_key}")
+                # generate llm1 prompts once per (base persona, style) (cache miss)
+                if cache_key not in llm1_cache:
+                    print(f"\n[cache miss] generating llm1 prompts for {cache_key}")
 
-                prompt_sys = render_prompt(
-                    tmpl_sys_llm1,
-                    BASE_PERSONA_JSON=base_persona_json,
-                    STYLE_JSON=style_json,
-                )
-                system_llm1 = generate_with_retries_qwen(
-                    tokenizer=tokenizer,
-                    model=model,
-                    prompt=prompt_sys,
-                    key="system_llm1",
-                    banned=banned_strings,
-                    persona_id=cache_key,
-                    label="system_llm1",
-                    max_retries=MAX_RETRIES,
-                )
-                if system_llm1 is None:
-                    print(f"[skip] {cache_key} system_llm1 failed leakage checks")
-                    continue
+                    prompt_sys = render_prompt(
+                        tmpl_sys_llm1,
+                        BASE_PERSONA_JSON=base_persona_json,
+                        STYLE_JSON=style_json,
+                    )
+                    system_llm1 = generate_with_retries_qwen(
+                        tokenizer=tokenizer,
+                        model=model,
+                        prompt=prompt_sys,
+                        key="system_llm1",
+                        banned=banned_strings,
+                        persona_id=cache_key,
+                        label="system_llm1",
+                        max_retries=MAX_RETRIES,
+                    )
+                    if system_llm1 is None:
+                        print(f"[skip] {cache_key} system_llm1 failed leakage checks")
+                        continue
 
-                prompt_user = render_prompt(
-                    tmpl_init_user,
-                    BASE_PERSONA_JSON=base_persona_json,
-                    STYLE_JSON=style_json,
-                )
-                init_user_message = generate_with_retries_qwen(
-                    tokenizer=tokenizer,
-                    model=model,
-                    prompt=prompt_user,
-                    key="init_user_message",
-                    banned=banned_strings,
-                    persona_id=cache_key,
-                    label="init_user_message",
-                    max_retries=MAX_RETRIES,
-                )
-                if init_user_message is None:
-                    print(f"[skip] {cache_key} init_user_message failed leakage checks")
-                    continue
+                    prompt_user = render_prompt(
+                        tmpl_init_user,
+                        BASE_PERSONA_JSON=base_persona_json,
+                        STYLE_JSON=style_json,
+                    )
+                    init_user_message = generate_with_retries_qwen(
+                        tokenizer=tokenizer,
+                        model=model,
+                        prompt=prompt_user,
+                        key="init_user_message",
+                        banned=banned_strings,
+                        persona_id=cache_key,
+                        label="init_user_message",
+                        max_retries=MAX_RETRIES,
+                    )
+                    if init_user_message is None:
+                        print(f"[skip] {cache_key} init_user_message failed leakage checks")
+                        continue
 
-                llm1_cache[cache_key] = {
-                    "system_llm1": system_llm1,
-                    "init_user_message": init_user_message,
-                }
-            else:
-                print(f"[cache hit] reusing llm1 prompts for {cache_key}")
+                    llm1_cache[cache_key] = {
+                        "system_llm1": system_llm1,
+                        "init_user_message": init_user_message,
+                    }
+                else:
+                    print(f"[cache hit] reusing llm1 prompts for {cache_key}")
 
-            system_llm1 = llm1_cache[cache_key]["system_llm1"]
-            init_user_message = llm1_cache[cache_key]["init_user_message"]
+                system_llm1 = llm1_cache[cache_key]["system_llm1"]
+                init_user_message = llm1_cache[cache_key]["init_user_message"]
 
-            # now only vary llm2 investigator mode
-            for inv_mode in INVESTIGATOR_MODES:
-                idx += 1
-                persona_id = make_persona_id(BASE_PERSONA_ID, style_id, inv_mode)
+                # now only vary llm2 investigator mode
+                for inv_mode in INVESTIGATOR_MODES:
+                    idx += 1
+                    persona_id = make_persona_id(base_persona_id, style_id, inv_mode)
 
-                if persona_id in existing_ids:
-                    print(f"[{idx}/{total}] [skip] {persona_id} already exists")
-                    continue
+                    if persona_id in existing_ids:
+                        print(f"[{idx}/{total}] [skip] {persona_id} already exists")
+                        continue
 
-                print(f"[{idx}/{total}] [gen] persona_id={persona_id}")
+                    print(f"[{idx}/{total}] [gen] persona_id={persona_id}")
 
-                system_llm2 = build_llm2_system_prompt(
-                    prompts_cfg=prompts_cfg,
-                    investigator_mode=inv_mode,
-                    style_ids=style_ids,
-                    style_names=style_names,
-                )
+                    system_llm2 = build_llm2_system_prompt(
+                        prompts_cfg=prompts_cfg,
+                        investigator_mode=inv_mode,
+                        style_ids=style_ids,
+                        style_names=style_names,
+                    )
 
-                row = {
-                    "persona_id": persona_id,
-                    "profile": {
-                        "base_persona_id": BASE_PERSONA_ID,
-                        "style_id": style_id,
-                        "investigator_mode": inv_mode,
-                        "base_persona": base_persona,
-                        "style": style_obj,
-                    },
-                    "system_llm1": system_llm1,
-                    "system_llm2": system_llm2,
-                    "init_user_message": init_user_message,
-                }
+                    row = {
+                        "persona_id": persona_id,
+                        "profile": {
+                            "base_persona_id": base_persona_id,
+                            "style_id": style_id,
+                            "investigator_mode": inv_mode,
+                            "base_persona": base_persona,
+                            "style": style_obj,
+                        },
+                        "system_llm1": system_llm1,
+                        "system_llm2": system_llm2,
+                        "init_user_message": init_user_message,
+                    }
 
-                f_out.write(json.dumps(row, ensure_ascii=False) + "\n")
-                f_out.flush()
+                    f_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    f_out.flush()
 
-                existing_ids.add(persona_id)
-                written += 1
-                print(f"[write] wrote row #{written}: {persona_id}")
+                    existing_ids.add(persona_id)
+                    written += 1
+                    print(f"[write] wrote row #{written}: {persona_id}")
 
     print(f"\n[done] wrote {written} new rows to {out_file}")
 
