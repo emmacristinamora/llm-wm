@@ -7,88 +7,60 @@
 
 # system prompt for LLM1
 generation_prompt_system_llm1:
-  description: "Prompt to generate a system prompt for LLM1 based on the hidden persona id and hidden style id."
+  description: "Generate a SYSTEM prompt for LLM1 (the user role) from base persona + style."
   prompt: >
-    You are writing a SYSTEM prompt for a language model that will roleplay a USER persona in a conversation.
+    Write a SYSTEM prompt for a model that will speak as the USER in a conversation.
 
-    You will be given two JSON objects:
-    (1) a base persona specification, and
-    (2) a style specification.
+    Inputs:
+    Base persona (JSON): {BASE_PERSONA_JSON}
+    Style (JSON): {STYLE_JSON}
 
-    Base persona (JSON):
-    {BASE_PERSONA_JSON}
+    Output goal:
+    Capture stable user tendencies and the writing style so the user's messages naturally match the goal/topic.
 
-    Style specification (JSON):
-    {STYLE_JSON}
-
-    Your goal:
-    - Make the model naturally behave like this user persona during the conversation.
-    - Embed the base persona and style as stable background facts and tendencies.
-    - Ensure the model's messages align with the conversation_goal and topic_anchor.
-    - Write as if setting the worldview, goals, and communication style of the user.
-
-    Requirements:
-    - The system prompt must be 2 to 6 sentences.
-    - Do NOT mention "persona", "attributes", "profile", "style_id", or "base_persona_id".
-    - Do NOT give any instructions to an assistant; the prompt is for a model playing the user.
-    - Do NOT include bullet lists or JSON inside the system prompt.
-    - Do NOT include "You are ChatGPT" or "You are an AI model".
-    - Do NOT mention any schema/metadata fields, IDs, or labels (e.g., base_persona_id, style_id, conversation_goal, etc.).
-    - You MAY describe tone/behavior in natural language, even if it overlaps with common words in the JSON (e.g., “formal”, “direct”).
-
-    Additional constraints (important):
-    - Write as implicit behavioral guidance, NOT as a self-description or trait list.
-    - Avoid repeated "I ..." preference statements (e.g., "I prefer", "I like", "I want"). Use at most ONE such phrase total.
-    - Do NOT explicitly state the user's level (avoid phrases like "I'm new to tech", "beginner", "novice").
-    - Encode style via form: sentence length, punctuation, hedging, structure, and emotional tone—rather than explicitly naming traits.
-    - Make it usable as a system instruction: describe how the user tends to speak, ask, and react (e.g., asks follow-ups, challenges assumptions, rambles), without labeling it.
-    - Avoid meta-language like "roleplay", "prompt", "system", "model", "assistant", "persona", "attributes".
+    Hard constraints:
+    - 2 to 5 sentences total.
+    - Descriptive voice ONLY (e.g., “The user… / They…”). Do NOT write commands or imperatives.
+    - Do NOT mention schema/metadata, IDs, or any of these words: persona, profile, attributes, style_id, base_persona_id, roleplay, prompt, system, model, assistant.
+    - Do NOT explicitly state the user's level (no “beginner/novice/new to tech”).
+    - Avoid trait lists; encode style through form (directness/hedging, structure, punctuation, tone, follow-ups, skepticism, meandering).
+    - At most ONE explicit “I …” preference sentence (preferably none).
 
     Return ONLY valid JSON:
-    {"system_llm1": "..."}
+    {"system_llm1":"..."}
 
 # initial user prompt for LLM1
 generation_prompt_init_user_prompt:
-  description: "Prompt to generate the initial user prompt for LLM1 to start the conversation. The prompt should reflect the persona."
+  description: "Generate the first USER message for LLM1 from base persona + style."
   prompt: >
-    You are generating the FIRST user message in a conversation with an assistant.
+    Write the FIRST user message in a conversation.
 
-    You will be given two JSON objects:
-    (1) a base persona specification, and
-    (2) a style specification.
+    Inputs:
+    Base persona (JSON): {BASE_PERSONA_JSON}
+    Style (JSON): {STYLE_JSON}
 
-    Base persona (JSON):
-    {BASE_PERSONA_JSON}
+    Output goal:
+    Produce ONE natural user message that matches the goal/topic and makes the style obvious through phrasing.
 
-    Style specification (JSON):
-    {STYLE_JSON}
+    Hard constraints:
+    - Exactly 1 message, 1 to 3 sentences.
+    - No greetings, no sign-offs, no emojis.
+    - Do NOT mention schema/metadata, IDs, or any of these words: persona, profile, attributes, style_id, base_persona_id, roleplay, experiment.
+    - Do NOT explicitly state the user's level (no “beginner/novice/new to tech”).
+    - Do NOT describe traits; show them via form.
 
-    Task:
-    - Write exactly ONE user message that is plausible given the base persona and matches the style.
-    - The message should align with the conversation_goal and topic_anchor.
-    - It must NOT explicitly reveal the underlying persona fields (no direct statements like "I am a novice", "I am skeptical", etc.).
-    - Avoid listing traits or describing the persona. Just write the message naturally.
+    Style rules (show, don't tell):
+    - formal: precise wording, compact structure (optionally a semicolon or colon), minimal hedging.
+    - warm: one softener or appreciation phrase; gentle tone; invite guidance.
+    - blunt: very short; direct ask; no extra context.
+    - skeptical: include a constraint/tradeoff question (assumptions, evidence, pitfalls).
+    - rambler: slightly meandering with a brief aside, but ends with a clear question.
 
-    Constraints:
-    - 1 turn only (no multi-turn).
-    - 1 to 4 sentences.
-    - No self-referential roleplay language.
-    - Do NOT include greetings like "Hi assistant".
-    - Do NOT reference being in an experiment / roleplay / persona.
-    - Do NOT mention any schema/metadata fields, IDs, or labels (e.g., base_persona_id, style_id, conversation_goal, etc.).
-    - You MAY use normal tone words naturally; just don't expose the underlying schema or categories.
-
-    Style enforcement:
-    - Make the style obvious from phrasing (not by stating traits).
-    - If formal: use precise wording and structured phrasing; no emojis; minimal hedging.
-    - If warm: include a softener or appreciation (e.g., "thank you", "I'd really appreciate"); gentle tone.
-    - If blunt: keep it very short; imperative; no extra context unless necessary.
-    - If skeptical: ask for assumptions, tradeoffs, or evidence; include at least one caveat-style question.
-    - If rambler: include a short tangent or aside; slightly meandering; still ends with a clear ask.
+    Topic control:
+    - Keep the content anchored to the same topic_anchor across styles; vary ONLY wording/structure.
 
     Return ONLY valid JSON:
-    {"init_user_message": "..."}
-
+    {"init_user_message":"..."}
 
 
 # === INVESTIGATOR MODE PROMPT LLM2 ===
