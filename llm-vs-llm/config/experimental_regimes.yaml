@@ -1,0 +1,63 @@
+# === EXPERIMENTS ===
+experiments:
+  # BASELINE
+  baseline:
+    description: "No hidden prompt. Both speak neutrally."
+    hidden_speaker: null
+    schedule:
+      type: "fixed"
+      style_id: "neutral"  # not used when hidden_speaker is null, but kept for consistency
+    investigator_mode: false
+
+  # VANILLA (FIXED STYLE)
+  style_fixed:
+    description: "Hidden prompt fixed for the entire conversation."
+    hidden_speaker: "A"
+    schedule:
+      type: "fixed"
+      style_id: "formal"  # choose from: neutral, formal, enthusiastic, terse, skeptical
+    investigator_mode: false
+
+  # VANILLA CYCLICAL (STYLE CHANGES EVERY N TURNS)
+  style_random_every_n:
+    description: "Hidden style changes every N turns, style is randomly chosen at change points."
+    hidden_speaker: "A"
+    schedule:
+      type: "every_n"
+      n: 4  # change style every N turns
+      style_ids: ["formal", "enthusiastic", "terse", "skeptical"]  # ????? SHOULD WE INCLUDE neutral
+      mode: "random"
+      random_seed_offset: 1000  # added to base seed for reproducibility
+    investigator_mode: false
+
+  # VANILLA RANDOM (STYLE CHANGES AT RANDOM TIMES)
+  style_random_change:
+    description: "At each hidden-speaker turn, the hidden style may change with probability p."
+    hidden_speaker: "A"
+    schedule:
+      type: "random_change"
+      style_ids: ["formal", "enthusiastic", "terse", "skeptical"]  # ????? SHOULD WE INCLUDE neutral
+      p_change: 0.2  # probability of changing style at each hidden-speaker turn
+      random_seed_offset: 2000  # added to base seed for reproducibility
+    investigator_mode: false
+
+  # INVESTIGATOR FIXED (FIXED STYLE)
+  investigator_fixed:
+    description: "Hidden prompt fixed for the entire conversation. Investigator tries to guess it."
+    hidden_speaker: "A"
+    schedule:
+      type: "fixed"
+      style_id: "formal"  # choose from: neutral, formal, enthusiastic, terse, skeptical ???
+    investigator_mode: true
+    investigator_speaker: "B"
+
+  # INVESTIGATOR CYCLICAL (STYLE CHANGES EVERY N TURNS)
+  investigator_random_every_n:
+    description: "Hidden style shifts every N turns. Investigator tries to guess it."
+    hidden_speaker: "A"
+    schedule:
+      type: "every_n"
+      n: 4  # change style every N turns
+      style_ids: ["formal", "enthusiastic", "terse", "skeptical"]  # ????? SHOULD WE INCLUDE neutral
+      mode: "random"
+      random_seed_offset: 3000  # added to base seed for reproducibility
