@@ -1,4 +1,17 @@
 # src/generate_experiments.py
+#
+# this script generates experiments.jsonl by:
+# 1) reading hidden persona + style specs from yaml
+# 2) using qwen locally (via transformers) to generate:
+#    - system_llm1 (persona-conditioned system prompt)
+#    - init_user_message (persona-conditioned first user turn)
+#    with leakage checks + retries
+# 3) combining those with llm2 system prompts (investigator modes) and writing jsonl
+#
+# notes:
+# - this version is for local qwen inference on the cluster (no openai api)
+# - it disables qwen "thinking" in the chat template to keep outputs parseable json
+# - it supplies attention_mask to avoid pad_token==eos_token warnings/odd behavior
 
 from __future__ import annotations
 
@@ -49,7 +62,7 @@ def read_yaml(path: Path) -> Dict[str, Any]:
 
 
 def safe_extract_json_object(text: str) -> Dict[str, Any]:
-    # tries strict json parse; if model wrapped it in text, extract the first {...} blob
+    # tries strict json parse; if the model wrapped it in text, extract the first {...} blob
     text = (text or "").strip()
     try:
         return json.loads(text)
@@ -74,6 +87,7 @@ def render_prompt(template: str, **kwargs: str) -> str:
 
 
 def load_existing_jsonl_ids(path: Path) -> set:
+    # used to resume: if persona_id already exists in experiments.jsonl, skip it
     if not path.exists():
         return set()
 
@@ -159,6 +173,7 @@ def contains_banned(text: str, banned: List[str]) -> Optional[str]:
 # === 3) qwen local inference ===
 
 def set_seed(seed: int) -> None:
+    # ensures repeatability for sampling
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -166,7 +181,7 @@ def set_seed(seed: int) -> None:
 
 def load_qwen(model_name: str, device_map: str = "auto") -> tuple[AutoTokenizer, AutoModelForCausalLM]:
     # loads tokenizer + model for local inference
-    # trust_remote_code is often required for qwen chat templates
+    # trust_remote_code is commonly needed for qwen chat templates
     tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
     # pick a reasonable dtype (bfloat16 if supported, else float16)
@@ -198,25 +213,34 @@ def qwen_complete_json(
     top_p: float,
     max_new_tokens: int,
 ) -> Dict[str, Any]:
-    # feeds the prompt through the qwen chat template if available,
-    # and returns a parsed json object.
+    # feeds the prompt through the qwen chat template if available
+    # returns a parsed json object
     messages = [{"role": "user", "content": prompt}]
 
     if hasattr(tokenizer, "apply_chat_template"):
+        # enable_thinking=false prevents "<think>..." from appearing in the output
         input_ids = tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
             return_tensors="pt",
+            enable_thinking=False,
         )
+        # attention mask is required because qwen often uses eos as pad,
+        # and transformers cannot reliably infer the mask in that case
+        attention_mask = torch.ones_like(input_ids)
     else:
-        input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+        enc = tokenizer(prompt, return_tensors="pt")
+        input_ids = enc.input_ids
+        attention_mask = enc.attention_mask
 
     # move tensors to the model device (works with device_map="auto")
     input_ids = input_ids.to(model.device)
+    attention_mask = attention_mask.to(model.device)
 
     with torch.no_grad():
         output_ids = model.generate(
-            input_ids,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
             do_sample=(temperature > 0),
             temperature=temperature,
             top_p=top_p,
@@ -242,16 +266,28 @@ def generate_with_retries_qwen(
     label: str,
     max_retries: int = MAX_RETRIES,
 ) -> Optional[str]:
+    # retries until:
+    # - json parses
+    # - target key exists
+    # - no banned strings are present
     for attempt in range(1, max_retries + 1):
-        obj = qwen_complete_json(
-            tokenizer=tokenizer,
-            model=model,
-            prompt=prompt,
-            temperature=TEMPERATURE,
-            top_p=TOP_P,
-            max_new_tokens=MAX_NEW_TOKENS,
-        )
+        try:
+            obj = qwen_complete_json(
+                tokenizer=tokenizer,
+                model=model,
+                prompt=prompt,
+                temperature=TEMPERATURE,
+                top_p=TOP_P,
+                max_new_tokens=MAX_NEW_TOKENS,
+            )
+        except Exception as e:
+            print(f"[parse] {persona_id} {label} parse failed (attempt {attempt}/{max_retries}): {e}")
+            continue
+
         candidate = (obj.get(key) or "").strip()
+        if not candidate:
+            print(f"[empty] {persona_id} {label} empty value (attempt {attempt}/{max_retries}) -> retry")
+            continue
 
         bad = contains_banned(candidate, banned)
         if bad is None:
