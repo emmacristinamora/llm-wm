@@ -20,6 +20,7 @@ profiles:
     # TECH STARTER = seek advice on technology as a novice, balanced detail
     bp_tech_starter:
       name: tech_starter
+      description: "New to tech and looking for practical guidance; asks clear questions and wants explanations that are understandable without heavy jargon."
       conversation_goal: seek_advice
       topic_anchor: technology
       domain_familiarity: novice
@@ -27,6 +28,7 @@ profiles:
     # CAREER BUILDER = brainstorm career ideas as intermediate, detailed
     bp_career_builder:
       name: career_builder
+      description: "Thinking through next career steps; likes exploring options with concrete suggestions, trade-offs, and actionable next moves."
       conversation_goal: brainstorm
       topic_anchor: career
       domain_familiarity: intermediate
@@ -34,6 +36,7 @@ profiles:
     # TRAVELER = plan as intermediate traveler, concise
     bp_traveler:
       name: traveler
+      description: "Planning trips efficiently; wants quick, usable recommendations (itineraries, logistics) without too much extra context."
       conversation_goal: plan
       topic_anchor: travel
       domain_familiarity: intermediate
@@ -43,6 +46,7 @@ profiles:
     # FORMAL = formal, structured
     st_formal:
       name: formal
+      description: "Professional tone; well-organized messages; prefers clear structure, precise wording, and minimal small talk."
       formality: formal
       warmth: neutral
       directness: direct
@@ -51,6 +55,7 @@ profiles:
     # WARM = warm, supportive
     st_warm:
       name: warm
+      description: "Friendly and encouraging; asks gently, shows appreciation, and invites discussion rather than demanding a single right answer."
       formality: neutral
       warmth: warm
       directness: hedged
@@ -59,6 +64,7 @@ profiles:
     # BLUNT = casual, direct
     st_blunt:
       name: blunt
+      description: "Straight to the point; short questions, clear requests, low tolerance for fluff; still generally friendly."
       formality: casual
       warmth: warm
       directness: direct
@@ -67,6 +73,7 @@ profiles:
     # SKEPTICAL = skeptical, precise
     st_skeptical:
       name: skeptical
+      description: "Analytical and careful; challenges claims, asks for evidence and caveats, prefers step-by-step reasoning and clear assumptions."
       formality: neutral
       warmth: neutral
       directness: direct
@@ -75,8 +82,26 @@ profiles:
     # RAMBLER = casual, stream of consciousness
     st_rambler:
       name: rambler
+      description: "Thinks out loud; longer, meandering messages with side thoughts; questions may be indirect and unfold gradually."
       formality: casual
       warmth: neutral
       directness: indirect
       structure: stream_of_consciousness
       trust_in_assistant: neutral
+
+leakage_controls:
+  banned_exact_strings:
+    - "base_persona_id"
+    - "style_id"
+    - "conversation_goal"
+    - "topic_anchor"
+    - "domain_familiarity"
+    - "preference_for_details"
+    - "formality"
+    - "directness"
+    - "trust_in_assistant"
+    - "persona"
+    - "profile"
+    - "attributes"
+    - "roleplay"
+    - "experiment"
