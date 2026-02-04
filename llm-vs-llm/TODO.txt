@@ -6,10 +6,14 @@
   => are the attributes good enough? look into research papers to see how they define them
   => are the styles too granular/should they be more granular?
   => rambler tends to stray away from the actual meaning, maybe add more constraints on it?
-- format the generate_experiment.py script  
+- format the score_transcript_llm1.py script  
 
 === TO CREATE/REDO ===
 - generate_transcript script from Allegra
 - score script based on Allegra's
 - implement parsing at each turn for investigator_guided and investigator_unguided (we should store and delete from the transcript 
 GUESS and CONFIDENCE before history.append)
+
+=== IDEAS ===
+- is max_tokens = 200 enough for assistant? i don't think it is. assistant messages get cut off constantly in the middle of 
+the convo

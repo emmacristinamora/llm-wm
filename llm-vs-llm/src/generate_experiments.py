@@ -1,36 +1,33 @@
 # src/generate_experiments.py
 #
-# this script generates experiments.jsonl by:
-# 1) reading hidden persona + style specs from yaml
-# 2) using qwen locally (via transformers) to generate:
+# This script generates experiments.jsonl by:
+# 1) Reading hidden persona + style specs from yaml
+# 2) Using QWEN locally (via transformers) to generate:
 #    - system_llm1 (persona-conditioned system prompt)
 #    - init_user_message (persona-conditioned first user turn)
 #    with leakage checks + retries
-# 3) combining those with llm2 system prompts (investigator modes) and writing jsonl
+# 3) Combining those with llm2 system prompts (investigator modes) and writing jsonl
 #
-# notes:
-# - this version is for local qwen inference on the cluster (no openai api)
+# Notes:
 # - it disables qwen "thinking" in the chat template to keep outputs parseable json
 # - it supplies attention_mask to avoid pad_token==eos_token warnings/odd behavior
 
-from __future__ import annotations
 
+# === 1. IMPORTS & CONFIG ===
+
+from __future__ import annotations
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-import argparse
 import json
 import re
 import random
-
+import argparse
 import yaml
-
-# qwen local inference (huggingface)
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-# === 1) config ===
-
+# config
 BASE_DIR = Path(__file__).parent.parent
 CONFIG_DIR = BASE_DIR / "config"
 ATTRIBUTES_YAML = CONFIG_DIR / "hidden_persona_attributes.yaml"
@@ -41,26 +38,24 @@ OUT_FILE = BASE_DIR / "experiments.jsonl"
 # if None, use ALL base personas found in hidden_persona_attributes.yaml
 BASE_PERSONA_IDS = None  
 INVESTIGATOR_MODES = ["none", "guided", "unguided"]
-LIMIT_STYLES = None  # set to 2 for debugging
+LIMIT_STYLES = None  # 2 for debugging
 
-# qwen model config
-# if your colleague used "Qwen/Qwen3-8B", keep it identical for prompt generation.
+# model config
 MODEL_NAME = "Qwen/Qwen3-8B"
-
-# generation params
 TEMPERATURE = 0.7
 TOP_P = 0.9
 MAX_NEW_TOKENS = 256
 MAX_RETRIES = 4
 SEED = 42
+DEVICE_MAP = "auto"  # or "cpu" for cpu-only
 
 
-# === 2) utils ===
+# === 2. UTILS ===
 
+# IO utils
 def read_yaml(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-
 
 def safe_extract_json_object(text: str) -> Dict[str, Any]:
     # tries strict json parse; if the model wrapped it in text, extract the first {...} blob
@@ -75,10 +70,8 @@ def safe_extract_json_object(text: str) -> Dict[str, Any]:
         raise ValueError(f"could not find json object in model output:\n{text[:500]}")
     return json.loads(m.group(0))
 
-
 def json_dumps_compact(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
-
 
 def render_prompt(template: str, **kwargs: str) -> str:
     out = template
@@ -88,7 +81,7 @@ def render_prompt(template: str, **kwargs: str) -> str:
 
 
 def load_existing_jsonl_ids(path: Path) -> set:
-    # used to resume: if persona_id already exists in experiments.jsonl, skip it
+    # used to resume: if persona_id already exists in experiments.jsonl => skip it
     if not path.exists():
         return set()
 
@@ -107,17 +100,20 @@ def load_existing_jsonl_ids(path: Path) -> set:
                 continue
     return ids
 
-
 def make_persona_id(base_persona_id: str, style_id: str, investigator_mode: str) -> str:
     return f"{base_persona_id}__{style_id}__inv_{investigator_mode}"
 
 
+# LLM2 system prompt builder
 def build_llm2_system_prompt(
     prompts_cfg: Dict[str, Any],
     investigator_mode: str,
     style_ids: List[str],
     style_names: List[str],
-) -> str:
+    ) -> str:
+    """
+    Builds the system prompt for LLM2 based on investigator mode.
+    """
     if investigator_mode == "none":
         return prompts_cfg["system_llm2_base"]["prompt"]
 
@@ -135,6 +131,7 @@ def build_llm2_system_prompt(
     raise ValueError(f"unknown investigator_mode: {investigator_mode}")
 
 
+# leakage controls
 def collect_dynamic_bans(attrs_cfg: Dict[str, Any]) -> List[str]:
     # collects strings that should never appear in system_llm1 / init_user_message
     bans = set()
@@ -152,7 +149,6 @@ def collect_dynamic_bans(attrs_cfg: Dict[str, Any]) -> List[str]:
 
     return sorted({b.strip() for b in bans if b and str(b).strip()})
 
-
 def contains_banned(text: str, banned: List[str]) -> Optional[str]:
     if not text:
         return None
@@ -163,7 +159,7 @@ def contains_banned(text: str, banned: List[str]) -> Optional[str]:
     return None
 
 
-# === 3) qwen local inference ===
+# === 3. MODEL ===
 
 def set_seed(seed: int) -> None:
     # ensures repeatability for sampling
@@ -205,7 +201,7 @@ def qwen_complete_json(
     temperature: float,
     top_p: float,
     max_new_tokens: int,
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     # feeds the prompt through the qwen chat template if available
     # returns a parsed json object
     messages = [{"role": "user", "content": prompt}]
@@ -218,7 +214,7 @@ def qwen_complete_json(
             return_tensors="pt",
             enable_thinking=False,
         )
-        # attention mask is required because qwen often uses eos as pad,
+        # attention mask is required because qwen often uses eos as pad
         # and transformers cannot reliably infer the mask in that case
         attention_mask = torch.ones_like(input_ids)
     else:
@@ -258,11 +254,15 @@ def generate_with_retries_qwen(
     persona_id: str,
     label: str,
     max_retries: int = MAX_RETRIES,
-) -> Optional[str]:
-    # retries until:
-    # - json parses
-    # - target key exists
-    # - no banned strings are present
+    ) -> Optional[str]:
+    """
+    Generates a JSON object with qwen and extracts the value for `key`.
+    Retries up to max_retries if:
+        - json parsing fails
+        - target key is missing or empty
+        - any banned strings are present in the value
+    Returns the extracted value if successful, else None.
+    """
     for attempt in range(1, max_retries + 1):
         try:
             obj = qwen_complete_json(
@@ -293,10 +293,10 @@ def generate_with_retries_qwen(
     return None
 
 
-# === 4) main generation ===
+# === 4. MAIN EXECUTION ===
 
 def main():
-    # --- load configs ---
+    # load configs
     print(f"[load] attributes from {ATTRIBUTES_YAML}")
     attrs_cfg = read_yaml(ATTRIBUTES_YAML)
 
@@ -316,7 +316,7 @@ def main():
         base_persona_items = [(bid, base_personas[bid]) for bid in BASE_PERSONA_IDS]
 
     style_items = list(styles.items())
-    effective_limit = args.limit_styles if args.limit_styles is not None else LIMIT_STYLES
+    effective_limit = LIMIT_STYLES if LIMIT_STYLES is not None else LIMIT_STYLES
     if effective_limit is not None:
         style_items = style_items[:effective_limit]
 
@@ -325,30 +325,30 @@ def main():
 
     print(f"[config] base_personas={len(base_persona_items)} styles={len(style_items)} investigator_modes={INVESTIGATOR_MODES}")
 
-    # --- leakage controls ---
+    # leakage controls 
     banned_strings = collect_dynamic_bans(attrs_cfg)
     print(f"[leakage] banned strings total: {len(banned_strings)}")
 
-    # --- resume support ---
-    existing_ids = load_existing_jsonl_ids(out_file)
-    print(f"[out] writing to {out_file} (existing rows: {len(existing_ids)})")
+    # resume support 
+    existing_ids = load_existing_jsonl_ids(OUT_FILE)
+    print(f"[out] writing to {OUT_FILE} (existing rows: {len(existing_ids)})")
 
-    # --- prompt templates ---
+    # prompt templates 
     tmpl_sys_llm1 = prompts_cfg["generation_prompt_system_llm1"]["prompt"]
     tmpl_init_user = prompts_cfg["generation_prompt_init_user_prompt"]["prompt"]
 
-    # --- load qwen locally ---
-    print(f"[model] loading {args.model_name} (device_map={args.device_map})")
-    tokenizer, model = load_qwen(args.model_name, device_map=args.device_map)
+    # load qwen locally 
+    print(f"[model] loading {MODEL_NAME} (device_map={DEVICE_MAP})")
+    tokenizer, model = load_qwen(MODEL_NAME, device_map=DEVICE_MAP)
 
-    # --- cache llm1 outputs once per (base_persona_id, style_id) ---
+    # cache llm1 outputs once per (base_persona_id, style_id) 
     llm1_cache: Dict[str, Dict[str, str]] = {}
 
     written = 0
     total = len(base_persona_items) * len(style_items) * len(INVESTIGATOR_MODES)
     idx = 0
 
-    with out_file.open("a", encoding="utf-8") as f_out:
+    with OUT_FILE.open("a", encoding="utf-8") as f_out:
         for base_persona_id, base_persona in base_persona_items:
             for style_id, style_obj in style_items:
                 cache_key = f"{base_persona_id}__{style_id}"
@@ -447,7 +447,7 @@ def main():
                     written += 1
                     print(f"[write] wrote row #{written}: {persona_id}")
 
-    print(f"\n[done] wrote {written} new rows to {out_file}")
+    print(f"\n[done] wrote {written} new rows to {OUT_FILE}")
 
 
 if __name__ == "__main__":

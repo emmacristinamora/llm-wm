@@ -1,5 +1,8 @@
 # config/hidden_persona_attributes.yaml
 
+
+# === HIDDEN PERSONA ATTRIBUTE VALUES ===
+
 attribute_values:
   base_persona:
     conversation_goal: [seek_advice, learn, brainstorm, vent, debate, plan, get_quick_answer]
@@ -15,7 +18,10 @@ attribute_values:
     trust_in_assistant: [skeptical, neutral, trusting]
 
 
+# === HIDDEN PERSONA PROFILES (manual selection of attribute values) ===
+
 profiles:
+  # BASE PERSONAS
   base_persona_id: 
     # TECH STARTER = seek advice on technology as a novice, balanced detail
     bp_tech_starter:
@@ -42,6 +48,7 @@ profiles:
       domain_familiarity: intermediate
       preference_for_details: concise
 
+  # STYLES
   style_id:
     # FORMAL = formal, structured
     st_formal:
@@ -88,6 +95,9 @@ profiles:
       directness: indirect
       structure: stream_of_consciousness
       trust_in_assistant: neutral
+
+
+# === DATA LEAKAGE CONTROLS ===
 
 leakage_controls:
   banned_exact_strings:

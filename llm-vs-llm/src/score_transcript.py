@@ -16,6 +16,9 @@
 # - assistant_turn_idx
 # - avg_nll, num_tokens, ppl
 
+
+# === 1. IMPORTS ===
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,7 +31,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-# === CONFIG ===
+# === 2. CONFIG ===
 
 BASE_DIR = Path(__file__).parent.parent
 TRANSCRIPT_PATH = BASE_DIR / "data" / "transcripts" / "with_cat_persona_20260203_162120.jsonl"
@@ -39,8 +42,9 @@ DEVICE_MAP = "auto"
 MAX_CONTEXT_TOKENS = 8192
 
 
-# === IO ===
+# === 3. UTILS ===
 
+# read jsonl
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
@@ -50,13 +54,11 @@ def read_jsonl(path: Path) -> List[Dict[str, Any]]:
                 rows.append(json.loads(line))
     return rows
 
-
+# ensure directory
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
-
-# === MODEL ===
-
+# ideally bf16 > fp16 > fp32
 def pick_dtype() -> torch.dtype:
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
         return torch.bfloat16
@@ -64,7 +66,7 @@ def pick_dtype() -> torch.dtype:
         return torch.float16
     return torch.float32
 
-
+# load model and tokenizer
 def load_model(model_name: str) -> Tuple[AutoTokenizer, AutoModelForCausalLM]:
     tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
@@ -78,9 +80,7 @@ def load_model(model_name: str) -> Tuple[AutoTokenizer, AutoModelForCausalLM]:
         tok.pad_token = tok.eos_token
     return tok, model
 
-
-# === CHAT TEMPLATE HELPERS ===
-
+# fall back chat template application
 def apply_chat_template(tokenizer, messages, add_generation_prompt: bool):
     """
     Robust wrapper across tokenizers that implement apply_chat_template with either:
@@ -111,14 +111,25 @@ def apply_chat_template(tokenizer, messages, add_generation_prompt: bool):
     return tokenizer(text, return_tensors="pt").input_ids
 
 
+# === 4. SCORING LOGIC ===
+
+# construct inputs and labels for scoring one assistant turn
 def build_inputs_for_assistant_turn(
     tokenizer: AutoTokenizer,
     system_prompt: str,
     history: List[Dict[str, str]],
     assistant_text: str,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Create (input_ids, labels) such that loss is computed ONLY on assistant_text tokens.
+    Args:
+        - tokenizer: AutoTokenizer
+        - system_prompt: str
+        - history: List[Dict[str, str]] (messages before assistant turn)
+        - assistant_text: str
+    Returns:
+        - input_ids: torch.Tensor
+        - labels: torch.Tensor
     """
     prompt_msgs: List[Dict[str, str]] = []
     if system_prompt:
@@ -137,10 +148,11 @@ def build_inputs_for_assistant_turn(
 
     return full_ids, labels
 
-
+# iterate over assistant turns in messages
 def iter_assistant_turns(messages: List[Dict[str, str]]) -> List[Tuple[int, List[Dict[str, str]], str]]:
     """
     Returns list of (assistant_turn_idx, history_before_turn, assistant_text).
+    Assumes messages is a list of dicts with 'role' and 'content'.
     """
     turns: List[Tuple[int, List[Dict[str, str]], str]] = []
     history: List[Dict[str, str]] = []
@@ -162,15 +174,26 @@ def iter_assistant_turns(messages: List[Dict[str, str]]) -> List[Tuple[int, List
 
     return turns
 
-
+# score one assistant turn
 @torch.no_grad()
 def score_one_assistant_turn(
     tokenizer: AutoTokenizer,
     model: AutoModelForCausalLM,
     system_prompt: str,
     history: List[Dict[str, str]],
-    assistant_text: str,
-) -> Dict[str, Any]:
+    assistant_text: str,    
+    ) -> Dict[str, Any]:
+    """
+    Score one assistant turn given system prompt and history.
+    Logic:
+        - build inputs and labels
+        - truncate from left if too long
+        - compute loss
+    Returns:
+        - avg_nll: float
+        - num_tokens: int
+        - ppl: float
+    """
     input_ids, labels = build_inputs_for_assistant_turn(tokenizer, system_prompt, history, assistant_text)
 
     # truncate from left if too long
@@ -199,17 +222,19 @@ def score_one_assistant_turn(
     }
 
 
+# === 5. MAIN PIPELINE ===
+
 def score_transcript_inv_none(
     transcript_path: Path,
     out_dir: Path,
-    model_name: str = SCORER_MODEL,
-) -> Path:
+    model_name: str = SCORER_MODEL, 
+    ) -> Path:
     """
     Minimal pipeline:
-    - load transcript jsonl
-    - keep only investigator_mode == "none"
-    - score each assistant turn
-    - save parquet
+        - load transcript jsonl
+        - keep only investigator_mode == "none"
+        - score each assistant turn
+        - save parquet
     """
     ensure_dir(out_dir)
 
