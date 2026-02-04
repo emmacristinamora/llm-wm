@@ -82,13 +82,27 @@ def load_model(model_name: str) -> Tuple[AutoTokenizer, AutoModelForCausalLM]:
 # === CHAT TEMPLATE HELPERS ===
 
 def apply_chat_template(tokenizer, messages, add_generation_prompt: bool):
+    """
+    Robust wrapper across tokenizers that implement apply_chat_template with either:
+    - apply_chat_template(conversation=..., ...)
+    - apply_chat_template(messages=..., ...)
+    """
     if hasattr(tokenizer, "apply_chat_template"):
-        kwargs = dict(messages=messages, add_generation_prompt=add_generation_prompt, return_tensors="pt")
-        # be robust to tokenizers that don't support enable_thinking
-        try:
-            return tokenizer.apply_chat_template(**kwargs, enable_thinking=False)
-        except TypeError:
-            return tokenizer.apply_chat_template(**kwargs)
+        # try the common HuggingFace signature variants
+        for kwargs in (
+            {"messages": messages, "add_generation_prompt": add_generation_prompt, "return_tensors": "pt"},
+            {"conversation": messages, "add_generation_prompt": add_generation_prompt, "return_tensors": "pt"},
+        ):
+            # some tokenizers accept enable_thinking, some don't
+            try:
+                return tokenizer.apply_chat_template(**kwargs, enable_thinking=False)
+            except TypeError:
+                try:
+                    return tokenizer.apply_chat_template(**kwargs)
+                except TypeError:
+                    pass  # try next variant
+
+    # fallback: plain text format
     text = ""
     for m in messages:
         text += f"{m['role'].upper()}: {m['content']}\n"
