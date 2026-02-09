@@ -318,7 +318,7 @@ def main():
         base_persona_items = [(bid, base_personas[bid]) for bid in BASE_PERSONA_IDS]
 
     style_items = list(styles.items())
-    effective_limit = LIMIT_STYLES if LIMIT_STYLES is not None else LIMIT_STYLES
+    effective_limit = LIMIT_STYLES
     if effective_limit is not None:
         style_items = style_items[:effective_limit]
 

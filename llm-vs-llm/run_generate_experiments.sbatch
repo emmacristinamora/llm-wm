@@ -22,6 +22,4 @@ export TRANSFORMERS_CACHE="$HF_HOME"
 # exact model
 export QWEN_MODEL="Qwen/Qwen3-8B"
 
-python -u src/generate_experiments.py \
-  --model_name "$QWEN_MODEL" \
-  --out_file experiments.jsonl
+python -u src/generate_experiments.py
