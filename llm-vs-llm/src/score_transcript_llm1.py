@@ -126,16 +126,19 @@ def build_inputs_for_user_turn(
         prompt_msgs.append({"role": "system", "content": system_prompt})
     prompt_msgs.extend(history)
 
-    # prompt ends right before the user message
-    prompt_ids = apply_chat_template(tokenizer, prompt_msgs, add_generation_prompt=False)
+    # build ids up to "user role marker" but with empty content, so that labels are correctly aligned to only score user_text tokens 
+    # we want to score only the actual user content tokens, not the role marker or any system/assistant tokens before it (USER:/)
+    empty_user_msgs = list(prompt_msgs) + [{"role": "user", "content": ""}]
+    empty_ids = apply_chat_template(tokenizer, empty_user_msgs, add_generation_prompt=False)
 
+    # now build full ids with actual user content
     full_msgs = list(prompt_msgs) + [{"role": "user", "content": user_text}]
     full_ids = apply_chat_template(tokenizer, full_msgs, add_generation_prompt=False)
 
-    prompt_len = prompt_ids.shape[-1]
+    empty_len = empty_ids.shape[-1]
     labels = torch.full_like(full_ids, fill_value=-100)
-    if full_ids.shape[-1] > prompt_len:
-        labels[:, prompt_len:] = full_ids[:, prompt_len:]
+    if full_ids.shape[-1] > empty_len:
+        labels[:, empty_len:] = full_ids[:, empty_len:]
 
     return full_ids, labels
 

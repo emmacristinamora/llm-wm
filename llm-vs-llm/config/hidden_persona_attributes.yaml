@@ -110,8 +110,6 @@ leakage_controls:
     - "formality"
     - "directness"
     - "trust_in_assistant"
-    - "persona"
-    - "profile"
     - "attributes"
     - "roleplay"
     - "experiment"

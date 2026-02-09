@@ -37,6 +37,7 @@ BASE_DIR = Path(__file__).parent.parent
 TRANSCRIPT_PATH = BASE_DIR / "data" / "transcripts" / "with_cat_persona_20260203_162120.jsonl"
 OUT_DIR = BASE_DIR / "data" / "scores"
 
+# TODO: implement assistant and not general model 
 SCORER_MODEL = "Qwen/Qwen3-8B"  # keep consistent with your setup
 DEVICE_MAP = "auto"
 MAX_CONTEXT_TOKENS = 8192

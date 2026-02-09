@@ -65,7 +65,9 @@ def safe_extract_json_object(text: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    # m = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    # non greedy regex
+    m = re.search(r"\{.*?\}", text, flags=re.DOTALL)
     if not m:
         raise ValueError(f"could not find json object in model output:\n{text[:500]}")
     return json.loads(m.group(0))
