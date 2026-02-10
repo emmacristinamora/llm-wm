@@ -31,7 +31,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # === CONFIG ===
 
 BASE_DIR = Path(__file__).parent.parent
-TRANSCRIPT_PATH = BASE_DIR / "src" / "data" / "conversationss" / "with_cat_persona_20260203_162120.jsonl"
+TRANSCRIPT_PATH = BASE_DIR / "src" / "data" / "conversations" / "transcripts.jsonl"
 OUT_DIR = BASE_DIR / "src" / "data" / "scores"
 
 
