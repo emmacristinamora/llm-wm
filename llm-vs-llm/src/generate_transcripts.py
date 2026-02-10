@@ -302,7 +302,7 @@ You are the USER in this conversation (not the assistant).
 Write ONLY the user's next message responding to the assistant.
 
 Constraints:
-- 2–4 sentences (max 120 words).
+- 1-2 sentences (max 80 words).
 - You may ask a question, accept/reject, request changes, or clarify.
 - Do NOT write an answer/solution or continue the assistant's output.
 - Do NOT write "Assistant:" or anything except the user message.
