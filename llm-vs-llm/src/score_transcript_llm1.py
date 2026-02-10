@@ -31,10 +31,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # === CONFIG ===
 
 BASE_DIR = Path(__file__).parent.parent
-TRANSCRIPT_PATH = BASE_DIR / "data" / "transcripts" / "with_cat_persona_20260203_162120.jsonl"
-OUT_DIR = BASE_DIR / "data" / "scores"
+TRANSCRIPT_PATH = BASE_DIR / "src" / "data" / "conversationss" / "with_cat_persona_20260203_162120.jsonl"
+OUT_DIR = BASE_DIR / "src" / "data" / "scores"
 
-SCORER_MODEL = "Qwen/Qwen3-8B"  # keep consistent with your setup
+
+SCORER_MODEL = "Qwen/Qwen3-4B-Instruct-2507"  # keep consistent with your setup
 DEVICE_MAP = "auto"
 MAX_CONTEXT_TOKENS = 8192
 
