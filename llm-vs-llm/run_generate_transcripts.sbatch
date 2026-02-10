@@ -30,7 +30,7 @@ source .venv/bin/activate
 # --- Cache locations (cluster-friendly) ---
 export HF_HOME="$REPO_ROOT/.cache/huggingface"
 export TRANSFORMERS_CACHE="$HF_HOME"
-export HF_HUB_ENABLE_HF_TRANSFER=1
+export HF_HUB_ENABLE_HF_TRANSFER=0
 export TOKENIZERS_PARALLELISM=false
 
 # Optional: make runs more stable/consistent
