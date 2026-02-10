@@ -3,7 +3,7 @@
 # === 1. IMPORTS ===
 
 import json
-import os
+import time
 import random
 import re
 import uuid
@@ -93,7 +93,8 @@ def parse_args():
     p.add_argument("--assistant_temp", type=float, default=0.7)
     p.add_argument("--user_max_new_tokens", type=int, default=150)
     p.add_argument("--user_temp", type=float, default=0.8)
-
+    p.add_argument("--verbose", action="store_true", help="Print progress during generation.")
+    p.add_argument("--print_every", type=int, default=1, help="Print every N conversations.")
     return p.parse_args()
 
 
@@ -128,6 +129,9 @@ def read_jsonl(path: Path) -> List[Dict]:
             rows.append(json.loads(line))
     return rows
 
+def log(msg: str, enabled: bool = True):
+    if enabled:
+        print(msg, flush=True)
 
 def load_model(name: str):
     tok = AutoTokenizer.from_pretrained(name)
@@ -248,6 +252,8 @@ def generate_conversation_with_persona(
     user_temp: float,
     assistant_max_new_tokens: int,
     assistant_temp: float,
+    verbose: bool = False,
+    tag: str = "",
 ) -> Tuple[Dict, List[Dict]]:
     """
     Returns:
@@ -295,7 +301,7 @@ You are the USER in this conversation (not the assistant).
 Write ONLY the user's next message responding to the assistant.
 
 Constraints:
-- 1-2 sentences (max 80 words).
+- 2 sentences (max 80 words).
 - You may ask a question, accept/reject, request changes, or clarify.
 - Do NOT write an answer/solution or continue the assistant's output.
 - Do NOT write "Assistant:" or anything except the user message.
@@ -305,6 +311,7 @@ Constraints:
 
     # alternate user/assistant until we have num_turns user messages total
     for _ in range(num_turns - 1):
+
         # user reacts based on persona instructions + last assistant message only
         user_messages = [
             {"role": "system", "content": system_llm1},
@@ -315,20 +322,37 @@ Constraints:
                 + "\n\nNow write the user's next message:"
             )},
         ]
+
+        if verbose:
+            print(f"[{tag}] user_turn generating...", flush=True)
+        t0 = time.time()
+
         user_reply = generate_reply(
             user_model, user_tok, user_messages,
             max_new_tokens=user_max_new_tokens,
             temperature=user_temp
         )
+
+        if verbose:
+            print(f"[{tag}] user_turn done ({time.time()-t0:.1f}s)", flush=True)
+
         messages.append({"role": "user", "content": user_reply})
 
         # assistant sees system_llm2 + full transcript
         assistant_messages = [{"role": "system", "content": system_llm2}] + messages
+
+        if verbose:
+            print(f"[{tag}] assistant_turn={assistant_turn_idx+1} generating...", flush=True)
+        t0 = time.time()
+
         assistant_reply_raw = generate_reply(
             assistant_model, assistant_tok, assistant_messages,
             max_new_tokens=assistant_max_new_tokens,
             temperature=assistant_temp
         )
+
+        if verbose:
+            print(f"[{tag}] assistant_turn={assistant_turn_idx+1} done ({time.time()-t0:.1f}s)", flush=True)
 
         assistant_turn_idx += 1
         assistant_reply_clean, inv = parse_assistant(assistant_reply_raw) if inv_mode in ("guided", "unguided") else (assistant_reply_raw.strip(), None)
@@ -384,6 +408,12 @@ def main():
     user_model, user_tok = load_model(args.user_model)
     assistant_model, assistant_tok = load_model(args.assistant_model)
 
+    total_exps = len(rows)
+    total_convs = total_exps * args.conversations_per_experiment
+    log(f"[INIT] experiments={total_exps} convs_per_exp={args.conversations_per_experiment} total_convs={total_convs}", args.verbose)
+    log(f"[INIT] user_model={args.user_model} assistant_model={args.assistant_model}", args.verbose)
+    log(f"[INIT] turns={args.num_turns} user_max_new={args.user_max_new_tokens} assistant_max_new={args.assistant_max_new_tokens}", args.verbose)
+
     num_written = 0
     num_inv_written = 0
 
@@ -398,6 +428,12 @@ def main():
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed_all(seed_here)
                 try:
+                    global_idx = exp_idx * args.conversations_per_experiment + rep + 1
+                    if args.verbose and (global_idx % args.print_every == 0):
+                        persona_id = exp.get("persona_id", "UNKNOWN")
+                        inv_mode = infer_investigator_mode(persona_id, exp.get("profile", {}))
+                        log(f"[START] {global_idx}/{total_convs} exp_idx={exp_idx} rep={rep} persona_id={persona_id} inv_mode={inv_mode}", True)
+                
                     # generate one conversation for this experiment row
                     conv, inv_meta = generate_conversation_with_persona(
                         user_model, user_tok,
@@ -408,6 +444,8 @@ def main():
                         user_temp=args.user_temp,
                         assistant_max_new_tokens=args.assistant_max_new_tokens,
                         assistant_temp=args.assistant_temp,
+                        verbose=args.verbose,
+                        tag=f"exp{exp_idx}_rep{rep}",
                     )
 
                     # add provenance
@@ -433,6 +471,9 @@ def main():
                             }
                             f_inv.write(json.dumps(rec_out, ensure_ascii=False) + "\n")
                             num_inv_written += 1
+
+                    if args.verbose and (global_idx % args.print_every == 0):
+                        log(f"[DONE ] {global_idx}/{total_convs} wrote conversation_id={conv['conversation_id']}", True)
 
                 except Exception as e:
                     print(f"Skipping (exp_idx={exp_idx}, rep={rep}) due to error: {e}")
