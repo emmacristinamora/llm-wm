@@ -100,35 +100,11 @@ def parse_args():
 # === 3. UTILS ===
 
 def strip_reasoning(text: str) -> str:
-    """
-    Qwen sometimes outputs only <think>...</think>. If we strip that, output becomes empty.
-    This removes reasoning but falls back to something non-empty when possible.
-    """
-    if text is None:
-        return ""
-
-    raw = text.strip()
-    if not raw:
-        return ""
-
-    # Remove well-formed <think>...</think>
-    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
-    # If an opening tag remains, drop everything after it
-    if "<think>" in cleaned:
-        cleaned = cleaned.split("<think>")[0].strip()
-
-    if cleaned:
-        return cleaned
-
-    # fallback: keep anything after </think> if present
-    if "</think>" in raw:
-        after = raw.split("</think>")[-1].strip()
-        if after:
-            return after
-
-    # last fallback: return raw even if it contains <think>
-    return raw
+    # Remove Qwen-style reasoning blocks if present
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    if "<think>" in text:
+        text = text.split("<think>")[0]
+    return text.strip()
 
 
 def read_jsonl(path: Path) -> List[Dict]:
