@@ -18,7 +18,7 @@ mkdir -p logs
 
 # cache model files in your home (recommended)
 export HF_HOME="$HOME/.cache/huggingface"
-export TRANSFORMERS_CACHE="$HF_HOME"
+export TRANSFORMERS_CACHE
 
 # exact model
 export QWEN_MODEL="Qwen/Qwen3-8B"
