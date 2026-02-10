@@ -16,8 +16,8 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # config
-USER_MODEL_NAME = "Qwen/Qwen3-8B"
-ASSISTANT_MODEL_NAME = "Qwen/Qwen3-8B"
+USER_MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
+ASSISTANT_MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
 
 
 # === 2. HELPERS ===
@@ -185,50 +185,32 @@ def generate_reply(model, tokenizer, messages: List[Dict[str, str]],
 
 # === 4. ASSISTANT PARSING ===
 
-INV_LINE_RE = re.compile(
-    r'^\s*<INVESTIGATION\s+guess="([^"]+)"\s+confidence="(\d{1,3})"\s*/>\s*$'
+INV_TAIL_RE = re.compile(
+    r'<INVESTIGATION\s+guess="([^"]+)"\s+confidence="(\d{1,3})"\s*/>\s*$'
 )
 
 def parse_assistant(text: str) -> Tuple[str, Optional[Dict]]:
     """
-    More forgiving version:
-    - Strips a trailing <INVESTIGATION guess="..." confidence=".."/> line even if:
-      * there are blank lines after it, or
-      * it isn't literally the last non-empty line.
-    - Returns (clean_text_without_inv_line, parsed_dict) or (original_text, None).
+    Extracts a trailing <INVESTIGATION .../> tag even if it is:
+      - on its own line, OR
+      - appended at the end of the last sentence.
     """
     if not text:
         return text, None
 
-    lines = text.splitlines()
-    if not lines:
-        return text.strip(), None
+    t = text.strip()
 
-    # walk upwards to find the last non-empty line; allow blank lines at the end
-    last_nonempty_idx = None
-    for i in range(len(lines) - 1, -1, -1):
-        if lines[i].strip() != "":
-            last_nonempty_idx = i
-            break
-
-    if last_nonempty_idx is None:
-        # text was all whitespace/newlines
-        return "", None
-
-    candidate = lines[last_nonempty_idx].strip()
-    m = INV_LINE_RE.match(candidate)
+    m = INV_TAIL_RE.search(t)
     if not m:
-        return text.strip(), None
+        return t, None
 
     guess = m.group(1).strip()
-    conf = int(m.group(2))
-    conf = max(0, min(100, conf))
+    conf = max(0, min(100, int(m.group(2))))
 
-    # remove the investigation line; also drop any trailing blank lines after it
-    clean_lines = lines[:last_nonempty_idx]
-    clean_text = "\n".join(clean_lines).rstrip()
+    # remove the tag (and any whitespace before it)
+    clean_text = t[: m.start()].rstrip()
 
-    parsed = {"guess": guess, "confidence": conf, "raw_line": candidate}
+    parsed = {"guess": guess, "confidence": conf, "raw_line": m.group(0).strip()}
     return clean_text, parsed
 
 

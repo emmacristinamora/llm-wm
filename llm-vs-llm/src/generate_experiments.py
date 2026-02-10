@@ -41,7 +41,7 @@ INVESTIGATOR_MODES = ["none", "guided", "unguided"]
 LIMIT_STYLES = None  # 2 for debugging
 
 # model config
-MODEL_NAME = "Qwen/Qwen3-8B"
+MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
 TEMPERATURE = 0.7
 TOP_P = 0.9
 MAX_NEW_TOKENS = 256
