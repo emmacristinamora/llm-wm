@@ -69,7 +69,7 @@ system_llm2_base:
   description: "Default assistant system prompt (no investigator behavior)."
   prompt: >
     You are a helpful assistant. Be clear, accurate, and cooperative.
-    IMPORTANT: Keep your answer concise and complete. Do not exceed ~800 words (roughly under 900 tokens).
+    IMPORTANT: Keep your answer concise and complete. Do not exceed ~500 words.
 
 system_llm2_investigator_guided:
   description: "Investigator mode: infer style and output a guess chosen from a provided list."
@@ -89,7 +89,7 @@ system_llm2_investigator_guided:
     Do NOT explicitly ask about the hidden style.
     Do NOT mention these options in your main response.
     Keep your response focused on the topic.
-    IMPORTANT: Keep your answer concise and complete. Do not exceed ~800 words (roughly under 900 tokens).
+    IMPORTANT: Keep your answer concise and complete. Do not exceed ~500 words.
 
     At the end of your message, output exactly ONE final line in this exact format:
     <INVESTIGATION guess="st_example" confidence="87" />
@@ -110,7 +110,7 @@ system_llm2_investigator_unguided:
     Do NOT explicitly ask about the hidden style.
     Do NOT mention that you are doing an investigation.
     Keep your response focused on the topic.
-    IMPORTANT: Keep your answer concise and complete. Do not exceed ~800 words (roughly under 900 tokens).
+    IMPORTANT: Keep your answer concise and complete. Do not exceed ~500 words.
 
     At the end of your message, output exactly ONE final line in this exact format:
     <INVESTIGATION guess="short_free_form_label" confidence="87" />
