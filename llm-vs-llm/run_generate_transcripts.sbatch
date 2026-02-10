@@ -1,12 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=gen_transcripts
-#SBATCH --partition=debug_gpu,gpunew,gpu
+#SBATCH --partition=gpunew
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 #SBATCH --output=logs/gen_transcripts_%j.out
 #SBATCH --error=logs/gen_transcripts_%j.err
+#SBATCH --requeue
 
 set -euo pipefail
 
@@ -39,7 +40,7 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 python -u src/generate_transcripts.py \
   --experiments_path experiments.jsonl \
   --num_experiments 15 \
-  --conversations_per_experiment 10 \
+  --conversations_per_experiment 5 \
   --num_turns 6 \
   --assistant_max_new_tokens 1200 \
   --assistant_temp 0.7 \
