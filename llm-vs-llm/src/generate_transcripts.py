@@ -100,11 +100,35 @@ def parse_args():
 # === 3. UTILS ===
 
 def strip_reasoning(text: str) -> str:
-    # Remove Qwen-style reasoning blocks if present
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    if "<think>" in text:
-        text = text.split("<think>")[0]
-    return text.strip()
+    """
+    Qwen sometimes outputs only <think>...</think>. If we strip that, output becomes empty.
+    This removes reasoning but falls back to something non-empty when possible.
+    """
+    if text is None:
+        return ""
+
+    raw = text.strip()
+    if not raw:
+        return ""
+
+    # Remove well-formed <think>...</think>
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+    # If an opening tag remains, drop everything after it
+    if "<think>" in cleaned:
+        cleaned = cleaned.split("<think>")[0].strip()
+
+    if cleaned:
+        return cleaned
+
+    # fallback: keep anything after </think> if present
+    if "</think>" in raw:
+        after = raw.split("</think>")[-1].strip()
+        if after:
+            return after
+
+    # last fallback: return raw even if it contains <think>
+    return raw
 
 
 def read_jsonl(path: Path) -> List[Dict]:
@@ -120,6 +144,8 @@ def read_jsonl(path: Path) -> List[Dict]:
 
 def load_model(name: str):
     tok = AutoTokenizer.from_pretrained(name)
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
     model = AutoModelForCausalLM.from_pretrained(
         name,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
@@ -127,6 +153,7 @@ def load_model(name: str):
     )
     model.eval()
     return model, tok
+
 
 def generate_reply(model, tokenizer, messages: List[Dict[str, str]],
                    max_new_tokens: int, temperature: float) -> str:
@@ -150,12 +177,23 @@ def generate_reply(model, tokenizer, messages: List[Dict[str, str]],
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
+            min_new_tokens=1,  # prevents instant-empty generations
             temperature=temperature,
             do_sample=True,
+            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
         )
 
-    decoded = tokenizer.decode(out[0][input_ids.shape[1]:], skip_special_tokens=True)
-    return strip_reasoning(decoded)
+    gen_ids = out[0][input_ids.shape[1]:]
+
+    # Decode WITHOUT skipping special tokens first (skip_special_tokens=True can yield empty)
+    decoded_raw = tokenizer.decode(gen_ids, skip_special_tokens=False).strip()
+
+    # fallback decode
+    if not decoded_raw:
+        decoded_raw = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
+    return strip_reasoning(decoded_raw)
 
 
 # === 4. ASSISTANT PARSING ===
