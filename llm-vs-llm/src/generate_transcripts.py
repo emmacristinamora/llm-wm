@@ -99,13 +99,24 @@ def parse_args():
 
 # === 3. UTILS ===
 
+THINK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+SPECIAL_TOKENS_RE = re.compile(
+    r"(<\|im_end\|>|<\|im_start\|>|<\|endoftext\|>|<\|eot_id\|>)"
+)
+
 def strip_reasoning(text: str) -> str:
-    # Remove Qwen-style reasoning blocks if present
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    if not text:
+        return text
+
+    # remove Qwen reasoning blocks
+    text = THINK_RE.sub("", text)
     if "<think>" in text:
         text = text.split("<think>")[0]
-    return text.strip()
 
+    # remove literal special tokens that sometimes leak into decoded text
+    text = SPECIAL_TOKENS_RE.sub("", text)
+
+    return text.strip()
 
 def read_jsonl(path: Path) -> List[Dict]:
     rows = []
