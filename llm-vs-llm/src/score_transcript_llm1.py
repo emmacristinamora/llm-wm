@@ -212,7 +212,6 @@ def score_transcript_inv_none_llm1(
     """
     Minimal pipeline:
     - load transcript jsonl
-    - keep only investigator_mode == "none"
     - score each USER turn
     - save parquet
     """
@@ -226,8 +225,6 @@ def score_transcript_inv_none_llm1(
     for i, row in enumerate(rows):
         profile = row.get("profile", {}) or {}
         inv_mode = profile.get("investigator_mode") or row.get("investigator_mode")
-        if inv_mode != "none":
-            continue
 
         persona_id = row.get("persona_id")
         base_persona_id = profile.get("base_persona_id")
@@ -245,6 +242,7 @@ def score_transcript_inv_none_llm1(
                 "persona_id": persona_id,
                 "base_persona_id": base_persona_id,
                 "style_id": style_id,
+                "investigator_mode": inv_mode,
                 "user_turn_idx": turn_idx,
                 **s,
             })
