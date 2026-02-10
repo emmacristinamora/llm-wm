@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=05:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/gen_transcripts_%j.out
 #SBATCH --error=logs/gen_transcripts_%j.err
 #SBATCH --requeue
@@ -36,13 +36,18 @@ export TOKENIZERS_PARALLELISM=false
 # Optional: make runs more stable/consistent
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
+# OUT_CONV="src/data/conversations/with_cat_persona_job${SLURM_JOB_ID}.jsonl"
+# OUT_INV="src/data/conversations/investigation_meta_job${SLURM_JOB_ID}.jsonl"
+
+# echo "[info] out_conv=${OUT_CONV}"
+# echo "[info] out_inv=${OUT_INV}"
+
 # --- Run ---
 python -u src/generate_transcripts.py \
-  --experiments_path experiments.jsonl \
-  --num_experiments 15 \
-  --conversations_per_experiment 5 \
+  --num_experiments 45 \
+  --conversations_per_experiment 20 \
   --num_turns 6 \
-  --assistant_max_new_tokens 1200 \
+  --assistant_max_new_tokens 800 \
   --assistant_temp 0.7 \
   --user_max_new_tokens 220 \
   --user_temp 0.8 \
