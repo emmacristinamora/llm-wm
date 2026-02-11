@@ -31,8 +31,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # === CONFIG ===
 
 BASE_DIR = Path(__file__).parent.parent
-TRANSCRIPT_PATH = BASE_DIR / "src" / "data" / "conversations" / "transcripts.jsonl"
-OUT_DIR = BASE_DIR / "src" / "data" / "scores"
+TRANSCRIPT_PATH = BASE_DIR / "src" / "data" / "conversations" / "transcripts_partial.jsonl"
+OUT_DIR = BASE_DIR / "src" / "data" / "scores_partial"
 
 
 SCORER_MODEL = "Qwen/Qwen3-4B-Instruct-2507"  # keep consistent with your setup
