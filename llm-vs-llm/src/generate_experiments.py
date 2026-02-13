@@ -47,7 +47,7 @@ TOP_P = 0.9
 MAX_NEW_TOKENS = 256
 MAX_RETRIES = 4
 SEED = 42
-DEVICE_MAP = "auto"  # or "cpu" for cpu-only
+DEVICE_MAP = "auto" 
 
 
 # === 2. UTILS ===
