@@ -9,8 +9,9 @@
 # This script:
 # 1) matches transcript rows with guess rows by conversation_id
 # 2) drops unmatched rows (either missing transcript or missing guess)
-# 3) restricts to the first NUMBER_EXPERIMENTS (by experiment_index)
-# 4) for each (conversation_id, turn_idx) guess event, computes:
+# 3) filters by investigator_mode and base_persona_id
+# 4) keeps the first N *guided* experiments (by ordinal rank, not raw experiment_index)
+# 5) for each (conversation_id, turn_idx) guess event, computes:
 #    (A) token-level attribution on the CURRENT GUESS:
 #        - delta logprob(guess) when masking one user token at a time
 #    (B) likelihood ratio (TRUE - GUESS):
@@ -29,17 +30,21 @@
 # - This works best for investigator_mode == "guided".
 # - For unguided, "guess" is free-form and does not match style_id space; LR metrics are still computed
 #   only if the "guess" accidentally equals a style_id. Otherwise LR fields are NaN.
+# - Results are saved incrementally every --checkpoint_every events, so cluster timeouts
+#   don't lose all progress. The final parquet overwrites the checkpoint.
 #
 # Performance:
-# - Masking is expensive. Start with small NUMBER_EXPERIMENTS and/or --max_user_tokens_to_mask.
+# - Masking is expensive. Start with small --num_styles and/or --max_user_tokens_to_mask.
 #
 # Usage:
 #   python -u src/score_investigator_attribution.py \
-#     --transcripts_path src/data/conversations/transcripts_partial.jsonl \
+#     --transcripts_path src/data/conversations/transcripts.jsonl \
 #     --guesses_path src/data/conversations/investigator_guesses_partial.jsonl \
-#     --num_experiments 5 \
 #     --out_dir src/data/scores_partial \
-#     --model Qwen/Qwen3-4B-Instruct-2507
+#     --model Qwen/Qwen3-4B-Instruct-2507 \
+#     --num_styles 5 \
+#     --guided_only \
+#     --max_user_tokens_to_mask 200
 #
 
 from __future__ import annotations
@@ -482,6 +487,56 @@ def compute_user_token_attributions(
     }
 
 
+# === CHECKPOINT HELPERS ===
+
+def save_checkpoint(records: List[Dict[str, Any]], out_path: Path) -> None:
+    """Save current records to parquet. Overwrites previous checkpoint."""
+    if not records:
+        return
+    df = pd.DataFrame.from_records(records)
+    df.to_parquet(out_path, index=False)
+    print(f"[checkpoint] saved {len(records)} rows -> {out_path}", flush=True)
+
+
+# === MATCHING: content-aware join ===
+
+def resolve_experiment_indices_for_guided(
+    transcripts: List[Dict[str, Any]],
+    num_styles: Optional[int],
+    base_persona_id: Optional[str],
+) -> set:
+    """
+    Discover which experiment_index values correspond to guided transcripts,
+    optionally filtered by base_persona_id. Then keep the first num_styles
+    of them (sorted) to cover that many distinct styles.
+
+    Returns a set of experiment_index values to keep.
+    """
+    guided_exp_indices: set = set()
+    for t in transcripts:
+        mode = t.get("investigator_mode", "")
+        if mode != "guided":
+            continue
+        profile = t.get("profile", {}) or {}
+        if base_persona_id is not None:
+            bp = profile.get("base_persona_id") or ""
+            if bp != base_persona_id:
+                continue
+        exp_idx = t.get("experiment_index")
+        if exp_idx is not None:
+            guided_exp_indices.add(int(exp_idx))
+
+    # Sort and take the first num_styles
+    sorted_indices = sorted(guided_exp_indices)
+    if num_styles is not None:
+        sorted_indices = sorted_indices[:num_styles]
+
+    kept = set(sorted_indices)
+    print(f"[info] guided experiment_indices found: {sorted(guided_exp_indices)}", flush=True)
+    print(f"[info] keeping {len(kept)} guided experiment_indices: {sorted(kept)}", flush=True)
+    return kept
+
+
 # === PIPELINE ===
 
 def parse_args():
@@ -495,18 +550,40 @@ def parse_args():
     p.add_argument("--device_map", type=str, default="auto")
     p.add_argument("--max_context_tokens", type=int, default=8192)
 
-    p.add_argument("--num_experiments", type=int, default=5, help="Keep guess events with experiment_index < num_experiments.")
-    p.add_argument("--guided_only", action="store_true", help="If set, keep only investigator_mode == guided.")
-    p.add_argument("--max_events", type=int, default=None, help="Optional cap on number of guess events processed.")
+    # --- changed: replace --num_experiments with --num_styles ---
+    p.add_argument("--num_styles", type=int, default=None,
+                   help="Keep the first N guided styles (by experiment_index rank). "
+                        "Default: all guided styles found.")
+    p.add_argument("--guided_only", action="store_true",
+                   help="If set, keep only investigator_mode == guided.")
+    p.add_argument("--base_persona_id", type=str, default=None,
+                   help="If set, restrict to transcripts with this base_persona_id. "
+                        "Example: bp_tech_starter")
+    p.add_argument("--max_events", type=int, default=None,
+                   help="Optional cap on number of guess events processed.")
 
     p.add_argument("--max_user_tokens_to_mask", type=int, default=None,
                    help="Optional cap on number of user tokens masked per event (for speed).")
+
+    # --- new: incremental checkpoint ---
+    p.add_argument("--checkpoint_every", type=int, default=10,
+                   help="Save intermediate results every N processed events.")
+
+    # --- back-compat: accept but ignore --num_experiments ---
+    p.add_argument("--num_experiments", type=int, default=None,
+                   help="DEPRECATED. Use --num_styles instead. If provided and --num_styles "
+                        "is not, this value is forwarded to --num_styles for back-compat.")
 
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Back-compat: --num_experiments -> --num_styles
+    if args.num_styles is None and args.num_experiments is not None:
+        print(f"[warn] --num_experiments is deprecated; interpreting as --num_styles={args.num_experiments}", flush=True)
+        args.num_styles = args.num_experiments
 
     transcripts_path = Path(args.transcripts_path)
     guesses_path = Path(args.guesses_path)
@@ -516,6 +593,21 @@ def main() -> None:
     transcripts = read_jsonl(transcripts_path)
     guesses = read_jsonl(guesses_path)
 
+    # --- Resolve which experiment_indices to keep ---
+    # Instead of a blanket "experiment_index < N", discover the actual guided
+    # experiment_indices from the transcripts and keep the first --num_styles.
+    if args.guided_only:
+        keep_exp_indices = resolve_experiment_indices_for_guided(
+            transcripts, args.num_styles, args.base_persona_id,
+        )
+    else:
+        # If not guided_only, fall back to keeping everything (or first N unique indices)
+        all_indices = sorted({int(t.get("experiment_index", -1)) for t in transcripts if t.get("experiment_index") is not None})
+        if args.num_styles is not None:
+            all_indices = all_indices[:args.num_styles]
+        keep_exp_indices = set(all_indices)
+        print(f"[info] keeping experiment_indices: {sorted(keep_exp_indices)}", flush=True)
+
     # Index transcripts by conversation_id
     t_by_cid: Dict[str, Dict[str, Any]] = {}
     for i, row in enumerate(transcripts):
@@ -523,11 +615,12 @@ def main() -> None:
         if cid:
             t_by_cid[str(cid)] = {"row": row, "conversation_idx": i}
 
-    # Filter guess rows: match transcript exists + experiment_index limit + optional guided_only
+    # Filter guess rows: match transcript exists + experiment_index in kept set + optional guided_only
     matched: List[Dict[str, Any]] = []
     dropped_no_transcript = 0
     dropped_experiment_limit = 0
     dropped_guided = 0
+    dropped_base_persona = 0
 
     for g in guesses:
         cid = str(g.get("conversation_id", ""))
@@ -536,7 +629,7 @@ def main() -> None:
             continue
 
         exp_idx = g.get("experiment_index")
-        if exp_idx is None or int(exp_idx) >= int(args.num_experiments):
+        if exp_idx is None or int(exp_idx) not in keep_exp_indices:
             dropped_experiment_limit += 1
             continue
 
@@ -544,18 +637,51 @@ def main() -> None:
             dropped_guided += 1
             continue
 
+        # Optional base_persona_id filter (check against transcript profile)
+        if args.base_persona_id is not None:
+            t_row = t_by_cid[cid]["row"]
+            profile = t_row.get("profile", {}) or {}
+            bp = profile.get("base_persona_id") or ""
+            if bp != args.base_persona_id:
+                dropped_base_persona += 1
+                continue
+
         matched.append(g)
 
     print(f"[info] transcripts={len(transcripts)} guesses={len(guesses)}", flush=True)
     print(f"[info] matched_guess_events={len(matched)}", flush=True)
     print(f"[info] dropped_no_transcript={dropped_no_transcript}", flush=True)
-    print(f"[info] dropped_experiment_limit={dropped_experiment_limit}", flush=True)
+    print(f"[info] dropped_experiment_filter={dropped_experiment_limit}", flush=True)
     if args.guided_only:
         print(f"[info] dropped_not_guided={dropped_guided}", flush=True)
+    if args.base_persona_id is not None:
+        print(f"[info] dropped_base_persona_mismatch={dropped_base_persona}", flush=True)
 
     if args.max_events is not None:
         matched = matched[: int(args.max_events)]
         print(f"[info] capped matched events to max_events={args.max_events}", flush=True)
+
+    # Summarize what we're about to score
+    styles_in_matched = set()
+    for g in matched:
+        cid = str(g["conversation_id"])
+        t_row = t_by_cid[cid]["row"]
+        profile = t_row.get("profile", {}) or {}
+        sid = profile.get("style_id")
+        if sid:
+            styles_in_matched.add(sid)
+    print(f"[info] styles to score: {sorted(styles_in_matched)}", flush=True)
+
+    # Output path
+    n_styles_tag = args.num_styles if args.num_styles is not None else "all"
+    bp_tag = args.base_persona_id or "all_personas"
+    out_path = out_dir / f"{transcripts_path.stem}__investigator_attr__{bp_tag}__n{n_styles_tag}.parquet"
+    print(f"[info] output path: {out_path}", flush=True)
+
+    if len(matched) == 0:
+        print("[warn] no matched events to score. Writing empty parquet.", flush=True)
+        pd.DataFrame().to_parquet(out_path, index=False)
+        return
 
     # Load model once
     tok, model = load_model(args.model, device_map=args.device_map)
@@ -627,14 +753,14 @@ def main() -> None:
             **scores,
         })
 
-        if (k + 1) % 10 == 0:
-            print(f"[progress] processed {k+1}/{len(matched)} guess events", flush=True)
+        processed = k + 1
+        if processed % args.checkpoint_every == 0:
+            print(f"[progress] processed {processed}/{len(matched)} guess events", flush=True)
+            save_checkpoint(records, out_path)
 
-    df = pd.DataFrame.from_records(records)
-
-    out_path = out_dir / f"{transcripts_path.stem}__investigator_attr__exp0to{args.num_experiments-1}.parquet"
-    df.to_parquet(out_path, index=False)
-    print(f"[done] wrote {out_path} rows={len(df)}", flush=True)
+    # Final save
+    save_checkpoint(records, out_path)
+    print(f"[done] wrote {out_path} rows={len(records)}", flush=True)
 
 
 if __name__ == "__main__":
