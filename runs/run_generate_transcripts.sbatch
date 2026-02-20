@@ -36,13 +36,15 @@ export TOKENIZERS_PARALLELISM=false
 # Optional: make runs more stable/consistent
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
-# OUT_CONV="src/data/conversations/with_cat_persona_job${SLURM_JOB_ID}.jsonl"
-# OUT_INV="src/data/conversations/investigation_meta_job${SLURM_JOB_ID}.jsonl"
+# OUT_CONV="data/conversations/with_cat_persona_job${SLURM_JOB_ID}.jsonl"
+# OUT_INV="data/conversations/investigation_meta_job${SLURM_JOB_ID}.jsonl"
 
 # echo "[info] out_conv=${OUT_CONV}"
 # echo "[info] out_inv=${OUT_INV}"
 
 # --- Run ---
+
+# the default output dir is src/data/conversations/ 
 python -u src/generate_transcripts.py \
   --num_experiments 45 \
   --conversations_per_experiment 20 \
