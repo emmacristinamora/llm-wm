@@ -42,7 +42,7 @@ def validate(model, val_inputs):
 
 def create_inputs(tokenizer, conversation, idx):
 
-    prompt_text = tokenizer.apply_chat_template(conversation[:idx-1], tokenize = False)
+    prompt_text = tokenizer.apply_chat_template(conversation[:idx], tokenize = False)
     prompt_text += NEW_TOKEN
 
     gt_text = f"<|im_start|>user\n{conversation[idx]["content"]}<|im_end|>\n"
