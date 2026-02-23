@@ -18,7 +18,7 @@ def set_grads(model):
 
 def set_loss_hook(model, tokenizer):
     embedding_layer = model.embed_tokens
-    mask = torch.zeros(len(embedding_layer.weight), 1, device=DEVICE)
+    mask = torch.zeros(len(embedding_layer.weight), 1, device=DEVICE, dtype=torch.bfloat16) # dtype to match Qwen default, otherwise RunTimeError hook '<lambda>' has changed the type of value (was CUDABFloat16Type got torch.cuda.FloatTensor)
     mask[len(tokenizer) - 1] = 1.0
     hook = embedding_layer.weight.register_hook(lambda grad: grad * mask)
     return hook
@@ -40,18 +40,12 @@ def validate(model, val_inputs):
         outputs = model(**val_inputs)
         return outputs.loss.item()
 
-def create_inputs(tokenizer, conversation, train=True):
+def create_inputs(tokenizer, conversation, idx):
 
-    if train:
-        idx = -2 # Last Human Input
-    else:
-        # Check one message before in val
-        idx = -4
-
-    prompt_text = tokenizer.apply_chat_template(conversation[:idx], tokenize = False)
+    prompt_text = tokenizer.apply_chat_template(conversation[:idx-1], tokenize = False)
     prompt_text += NEW_TOKEN
 
-    gt_text = f"<|im_start|>user\n{conversation[idx+1]["content"]}<|im_end|>\n"
+    gt_text = f"<|im_start|>user\n{conversation[idx]["content"]}<|im_end|>\n"
 
     full_text = prompt_text + gt_text
 
@@ -99,8 +93,9 @@ def main():
 
     # NOTE: For now assume fixed input and output, no batching
 
-    train_inputs = create_inputs(tokenizer, sample_conversation)
-    val_inputs = create_inputs(tokenizer, sample_conversation, train = False)
+    train_inputs = create_inputs(tokenizer, sample_conversation, idx=-2)
+    val_indices = [-4, -6, -8]
+    val_inputs = [create_inputs(tokenizer, sample_conversation, idx) for idx in val_indices]
     
     train_steps = 100
     lr = 1e-3
@@ -111,8 +106,10 @@ def main():
     cum_loss = 0.0
     for step in range(train_steps):
         if step % 10 == 0:
-            val_loss = validate(model, val_inputs)
-            print(f"Step {step}: Loss is {cum_loss} / Validation Loss is {val_loss}")
+            val_loss = dict()
+            for i, val_input in zip(val_indices, val_inputs):
+              val_loss[i] = validate(model, val_input)
+            print(f"Step {step}: Cum Loss is {cum_loss:.2f} / Validation Loss is {val_loss}")
             cum_loss = 0.0
 
         cum_loss += train_step(model, optimizer, train_inputs)
