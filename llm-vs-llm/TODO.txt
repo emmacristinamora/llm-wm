@@ -4,3 +4,4 @@ experimental setup such that user and assistant response lengths don't differ so
 - enforce better styles?
 - rerun the transcript generation -> get full results & better conversations following the above
 - fix investigator unguided -> rn the guesses make little sense
+- UPDATE READ ME

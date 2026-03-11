@@ -1,4 +1,4 @@
-# src/score_transcript_llm1.py
+# src/score_transcripts.py
 #
 # Minimal scorer for transcripts where investigator_mode == "none".
 # Produces per-USER-turn (LLM1) NLL scores and saves to data/scores/*.parquet.
@@ -35,7 +35,7 @@ TRANSCRIPT_PATH = BASE_DIR / "src" / "data" / "conversations" / "transcripts_par
 OUT_DIR = BASE_DIR / "src" / "data" / "scores_partial"
 
 
-SCORER_MODEL = "Qwen/Qwen3-4B-Instruct-2507"  # keep consistent with your setup
+SCORER_MODEL = "Qwen/Qwen3-4B-Instruct-2507"  # keep consistent with setup
 DEVICE_MAP = "auto"
 MAX_CONTEXT_TOKENS = 8192
 
@@ -101,7 +101,7 @@ def apply_chat_template(tokenizer, messages, add_generation_prompt: bool):
                 except TypeError:
                     pass
 
-    # fallback: plain text format
+    # fallback => plain text format
     text = ""
     for m in messages:
         text += f"{m['role'].upper()}: {m['content']}\n"
@@ -115,7 +115,7 @@ def build_inputs_for_user_turn(
     system_prompt: str,
     history: List[Dict[str, str]],
     user_text: str,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Create (input_ids, labels) such that loss is computed ONLY on user_text tokens.
 
@@ -132,7 +132,7 @@ def build_inputs_for_user_turn(
     empty_user_msgs = list(prompt_msgs) + [{"role": "user", "content": ""}]
     empty_ids = apply_chat_template(tokenizer, empty_user_msgs, add_generation_prompt=False)
 
-    # now build full ids with actual user content
+    # build full ids with actual user content
     full_msgs = list(prompt_msgs) + [{"role": "user", "content": user_text}]
     full_ids = apply_chat_template(tokenizer, full_msgs, add_generation_prompt=False)
 
@@ -175,7 +175,7 @@ def score_one_user_turn(
     system_prompt: str,
     history: List[Dict[str, str]],
     user_text: str,
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     input_ids, labels = build_inputs_for_user_turn(tokenizer, system_prompt, history, user_text)
 
     # truncate from left if too long
@@ -208,7 +208,7 @@ def score_transcript_inv_none_llm1(
     transcript_path: Path,
     out_dir: Path,
     model_name: str = SCORER_MODEL,
-) -> Path:
+    ) -> Path:
     """
     Minimal pipeline:
     - load transcript jsonl

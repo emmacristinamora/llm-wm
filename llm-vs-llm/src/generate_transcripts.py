@@ -177,7 +177,7 @@ def generate_reply(model, tokenizer, messages: List[Dict[str, str]],
 
     gen_ids = out[0][input_ids.shape[1]:]
 
-    # Decode WITHOUT skipping special tokens first (skip_special_tokens=True can yield empty)
+    # decode WITHOUT skipping special tokens first (skip_special_tokens=True can yield empty)
     decoded_raw = tokenizer.decode(gen_ids, skip_special_tokens=False).strip()
 
     # fallback decode

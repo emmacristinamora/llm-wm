@@ -60,7 +60,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-# === CONFIG (defaults; override via CLI) ===
+# === CONFIG ===
 
 BASE_DIR = Path(__file__).parent.parent
 
@@ -125,7 +125,7 @@ def apply_chat_template_text(tokenizer, messages: List[Dict[str, str]], add_gene
             {"conversation": messages, "tokenize": False, "add_generation_prompt": add_generation_prompt},
         ):
             try:
-                # Some tokenizers accept enable_thinking; if not, this will be ignored by TypeError path.
+                # Ssome tokenizers accept enable_thinking
                 return tokenizer.apply_chat_template(**kwargs, enable_thinking=False)
             except TypeError:
                 try:
@@ -133,7 +133,7 @@ def apply_chat_template_text(tokenizer, messages: List[Dict[str, str]], add_gene
                 except TypeError:
                     pass
 
-    # fallback: plain format
+    # fallback => plain format
     s = ""
     for m in messages:
         s += f"{m['role'].upper()}: {m['content']}\n"
@@ -142,7 +142,9 @@ def apply_chat_template_text(tokenizer, messages: List[Dict[str, str]], add_gene
     return s
 
 
-# === UTILS: transcript alignment ===
+# === UTILS ===
+
+# transcript alignment
 
 def assistant_msg_index_from_turn_idx(turn_idx: int) -> int:
     """
@@ -190,7 +192,7 @@ def iter_user_messages_only(history: List[Dict[str, str]]) -> List[Tuple[int, st
     return out
 
 
-# === SCORING: logprob of a target label ===
+# === SCORING ===
 
 @torch.no_grad()
 def logprob_of_target_continuation(
@@ -201,7 +203,7 @@ def logprob_of_target_continuation(
     target_text: str,
     suffix_text: str,
     max_context_tokens: int = 8192,
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     """
     Compute log P(target_text | base_prompt_text) by scoring the target token slice
     inside: base + target + suffix.
@@ -221,21 +223,20 @@ def logprob_of_target_continuation(
     base_len = int(base_ids.shape[-1])
     full_len = int(full_ids.shape[-1])
 
-    # Target ids in isolation (context-sensitive tokenization can differ at boundaries,
-    # but in practice with base ending exactly at the quote, this is stable enough.)
+    # target ids in isolation
     target_ids = tokenizer(target_text, return_tensors="pt", add_special_tokens=False).input_ids
     target_len = int(target_ids.shape[-1])
 
-    # Safety: ensure we have room
+    # sanity check => target should fit within full - base
     if base_len + target_len > full_len:
-        # fallback: derive target_len as the remaining before suffix (approx)
+        # fallback => derive target_len as the remaining before suffix (approx)
         target_len = max(0, full_len - base_len)
 
-    # Truncate from LEFT if too long
+    # truncate from LEFT if too long
     if full_len > max_context_tokens:
         overflow = full_len - max_context_tokens
         full_ids = full_ids[:, overflow:]
-        # Adjust base_len relative to truncated sequence
+        # adjust base_len relative to truncated sequence
         base_len = max(0, base_len - overflow)
         full_len = int(full_ids.shape[-1])
 
@@ -245,8 +246,8 @@ def logprob_of_target_continuation(
     out = model(input_ids=full_ids, attention_mask=attn)
     logits = out.logits  # [1, T, V]
 
-    # We want logprobs for token positions corresponding to the target tokens:
-    # token at position t is predicted by logits at t-1.
+    # want logprobs for token positions corresponding to the target tokens
+    # token at position t is predicted by logits at t-1
     start = base_len
     end = min(full_len, base_len + target_len)
     if start >= end:
@@ -257,9 +258,7 @@ def logprob_of_target_continuation(
             "per_token_logprobs": [],
         }
 
-    # Compute log softmax over vocab for the relevant positions
-    # Positions to score: start..end-1 (token indices), use logits at (start-1)..(end-2)
-    # But if start==0, can't score first token (no context). That won't happen here.
+    # compute log softmax over vocab for the relevant positions
     tok_ids = full_ids[0, start:end]  # [L]
     prev_logits = logits[0, start - 1:end - 1, :]  # [L, V]
 
@@ -288,7 +287,7 @@ def score_guess_and_true(
     guess_label: str,
     true_label: Optional[str],
     max_context_tokens: int,
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     """
     Creates a base prompt that ends where the investigator would start printing the label,
     then scores guess_label and true_label as continuations.
@@ -298,16 +297,16 @@ def score_guess_and_true(
         msgs.append({"role": "system", "content": system_prompt})
     msgs.extend(history)
 
-    # We want the assistant to "continue" here:
+    # we want the assistant to "continue" here
     base_prompt = apply_chat_template_text(tokenizer, msgs, add_generation_prompt=True)
 
-    # The exact continuation format from your prompt:
-    # assistant_text + "\n<INVESTIGATION guess=" + LABEL + '" confidence="50" />'
-    # Use constant confidence to keep suffix identical across comparisons.
+    # exact continuation format from your prompt
+    ## assistant_text + "\n<INVESTIGATION guess=" + LABEL + '" confidence="50" />'
+    ## use constant confidence to keep suffix identical across comparisons.
     prefix = assistant_text + "\n<INVESTIGATION guess=\""
     suffix = "\" confidence=\"50\" />"
 
-    # Score guess
+    # score guess
     guess_score = logprob_of_target_continuation(
         tokenizer, model,
         base_prompt_text=base_prompt + prefix,
@@ -316,7 +315,7 @@ def score_guess_and_true(
         max_context_tokens=max_context_tokens,
     )
 
-    # Score true (if available)
+    # score true (if available)
     if true_label is None:
         true_score = None
     else:
@@ -357,14 +356,14 @@ def score_guess_and_true(
     return out
 
 
-# === MASKING: token-level attribution ===
+# === MASKING - TOKEN LEVEL ATTRIBUTION ===
 
 def mask_one_token_in_text(
     tokenizer: AutoTokenizer,
     text: str,
     token_idx: int,
     mask_text: str = "[REDACTED]",
-) -> str:
+    ) -> str:
     """
     Token-level masking via tokenization->decode. We replace exactly one token id with
     the tokenization of mask_text.
@@ -392,7 +391,7 @@ def compute_user_token_attributions(
     true_label: Optional[str],
     max_context_tokens: int,
     max_user_tokens_to_mask: Optional[int] = None,
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     """
     Returns dict with:
       - base scores (guess logprob; LR if true provided)
@@ -400,7 +399,7 @@ def compute_user_token_attributions(
           * delta_guess_total_logprob per masked token
           * delta_lr_mean per masked token (if true provided)
     """
-    # Base scores
+    # base scores
     base_scores = score_guess_and_true(
         tokenizer, model,
         system_prompt=system_prompt,
@@ -414,7 +413,7 @@ def compute_user_token_attributions(
     base_guess_lp = base_scores["guess_total_logprob"]
     base_lr_mean = base_scores["lr_mean_true_minus_guess"]
 
-    # Enumerate user tokens across all user messages in history
+    # enumerate user tokens across all user messages in history
     user_msgs = iter_user_messages_only(history)
 
     guess_attr_rows: List[Dict[str, Any]] = []
@@ -430,7 +429,7 @@ def compute_user_token_attributions(
             if max_user_tokens_to_mask is not None and total_masked >= max_user_tokens_to_mask:
                 break
 
-            # Build masked history
+            # build masked history
             masked_history: List[Dict[str, str]] = []
             cur_user_count = 0
             for m in history:
@@ -456,7 +455,7 @@ def compute_user_token_attributions(
                 max_context_tokens=max_context_tokens,
             )
 
-            # (A) Token attribution for current guess
+            # token attribution for current guess
             masked_guess_lp = masked_scores["guess_total_logprob"]
             guess_attr_rows.append({
                 "user_msg_ord": user_msg_ord,
@@ -465,7 +464,7 @@ def compute_user_token_attributions(
                 "delta_guess_total_logprob": float(masked_guess_lp - base_guess_lp),
             })
 
-            # (C) Token influence on LR (mean LR is recommended)
+            # token influence on LR
             if true_label is not None and not (math.isnan(base_lr_mean) or math.isnan(masked_scores["lr_mean_true_minus_guess"])):
                 lr_attr_rows.append({
                     "user_msg_ord": user_msg_ord,
@@ -498,13 +497,13 @@ def save_checkpoint(records: List[Dict[str, Any]], out_path: Path) -> None:
     print(f"[checkpoint] saved {len(records)} rows -> {out_path}", flush=True)
 
 
-# === MATCHING: content-aware join ===
+# === MATCHING - CONTENT AWARE JOIN ===
 
 def resolve_experiment_indices_for_guided(
     transcripts: List[Dict[str, Any]],
     num_styles: Optional[int],
     base_persona_id: Optional[str],
-) -> set:
+    ) -> set:
     """
     Discover which experiment_index values correspond to guided transcripts,
     optionally filtered by base_persona_id. Then keep the first num_styles
@@ -550,7 +549,6 @@ def parse_args():
     p.add_argument("--device_map", type=str, default="auto")
     p.add_argument("--max_context_tokens", type=int, default=8192)
 
-    # --- changed: replace --num_experiments with --num_styles ---
     p.add_argument("--num_styles", type=int, default=None,
                    help="Keep the first N guided styles (by experiment_index rank). "
                         "Default: all guided styles found.")
@@ -565,11 +563,10 @@ def parse_args():
     p.add_argument("--max_user_tokens_to_mask", type=int, default=None,
                    help="Optional cap on number of user tokens masked per event (for speed).")
 
-    # --- new: incremental checkpoint ---
+    # incremental checkpoint
     p.add_argument("--checkpoint_every", type=int, default=10,
                    help="Save intermediate results every N processed events.")
 
-    # --- back-compat: accept but ignore --num_experiments ---
     p.add_argument("--num_experiments", type=int, default=None,
                    help="DEPRECATED. Use --num_styles instead. If provided and --num_styles "
                         "is not, this value is forwarded to --num_styles for back-compat.")
@@ -580,7 +577,7 @@ def parse_args():
 def main() -> None:
     args = parse_args()
 
-    # Back-compat: --num_experiments -> --num_styles
+    # back-compat: --num_experiments => --num_styles
     if args.num_styles is None and args.num_experiments is not None:
         print(f"[warn] --num_experiments is deprecated; interpreting as --num_styles={args.num_experiments}", flush=True)
         args.num_styles = args.num_experiments
@@ -593,29 +590,27 @@ def main() -> None:
     transcripts = read_jsonl(transcripts_path)
     guesses = read_jsonl(guesses_path)
 
-    # --- Resolve which experiment_indices to keep ---
-    # Instead of a blanket "experiment_index < N", discover the actual guided
-    # experiment_indices from the transcripts and keep the first --num_styles.
+    # resolve which experiment_indices to keep
     if args.guided_only:
         keep_exp_indices = resolve_experiment_indices_for_guided(
             transcripts, args.num_styles, args.base_persona_id,
         )
     else:
-        # If not guided_only, fall back to keeping everything (or first N unique indices)
+        # if not guided_only, fall back to keeping everything (or first N unique indices)
         all_indices = sorted({int(t.get("experiment_index", -1)) for t in transcripts if t.get("experiment_index") is not None})
         if args.num_styles is not None:
             all_indices = all_indices[:args.num_styles]
         keep_exp_indices = set(all_indices)
         print(f"[info] keeping experiment_indices: {sorted(keep_exp_indices)}", flush=True)
 
-    # Index transcripts by conversation_id
+    # index transcripts by conversation_id
     t_by_cid: Dict[str, Dict[str, Any]] = {}
     for i, row in enumerate(transcripts):
         cid = row.get("conversation_id")
         if cid:
             t_by_cid[str(cid)] = {"row": row, "conversation_idx": i}
 
-    # Filter guess rows: match transcript exists + experiment_index in kept set + optional guided_only
+    # match transcript exists + experiment_index in kept set + optional guided_only
     matched: List[Dict[str, Any]] = []
     dropped_no_transcript = 0
     dropped_experiment_limit = 0
@@ -637,7 +632,7 @@ def main() -> None:
             dropped_guided += 1
             continue
 
-        # Optional base_persona_id filter (check against transcript profile)
+        # optional base_persona_id filter (check against transcript profile)
         if args.base_persona_id is not None:
             t_row = t_by_cid[cid]["row"]
             profile = t_row.get("profile", {}) or {}
@@ -661,7 +656,7 @@ def main() -> None:
         matched = matched[: int(args.max_events)]
         print(f"[info] capped matched events to max_events={args.max_events}", flush=True)
 
-    # Summarize what we're about to score
+    # summarize 
     styles_in_matched = set()
     for g in matched:
         cid = str(g["conversation_id"])
@@ -672,7 +667,7 @@ def main() -> None:
             styles_in_matched.add(sid)
     print(f"[info] styles to score: {sorted(styles_in_matched)}", flush=True)
 
-    # Output path
+    # output path
     n_styles_tag = args.num_styles if args.num_styles is not None else "all"
     bp_tag = args.base_persona_id or "all_personas"
     out_path = out_dir / f"{transcripts_path.stem}__investigator_attr__{bp_tag}__n{n_styles_tag}.parquet"
@@ -683,7 +678,7 @@ def main() -> None:
         pd.DataFrame().to_parquet(out_path, index=False)
         return
 
-    # Load model once
+    # load model once
     tok, model = load_model(args.model, device_map=args.device_map)
 
     records: List[Dict[str, Any]] = []
@@ -709,16 +704,14 @@ def main() -> None:
         try:
             history, assistant_text = history_before_assistant_turn(messages, turn_idx)
         except Exception as e:
-            # cannot align this guess event to transcript structure
+            # can't align this guess event to transcript structure
             print(f"[warn] skip cid={cid} turn_idx={turn_idx} due to alignment error: {e}", flush=True)
             continue
 
-        # Decide whether LR can be computed:
-        # - For guided: true is style_id (e.g., st_formal)
-        # - For unguided: guess is free-form; LR only makes sense if guess_label equals one of your style_ids
+        # compute LR if style_true is available and guess_label is in the same label space (exact match)
         true_label_for_lr: Optional[str] = str(style_true) if style_true is not None else None
 
-        # Compute scores + attributions
+        # compute scores + attributions
         scores = compute_user_token_attributions(
             tok, model,
             system_prompt=system_prompt,
@@ -746,10 +739,10 @@ def main() -> None:
             "guess": guess_label,
             "confidence": confidence,
 
-            # Store assistant text (optional; can be large)
+            # store assistant text 
             "assistant_text": assistant_text,
 
-            # Scores:
+            # scores
             **scores,
         })
 
@@ -758,7 +751,7 @@ def main() -> None:
             print(f"[progress] processed {processed}/{len(matched)} guess events", flush=True)
             save_checkpoint(records, out_path)
 
-    # Final save
+    # final save
     save_checkpoint(records, out_path)
     print(f"[done] wrote {out_path} rows={len(records)}", flush=True)
 
