@@ -333,6 +333,9 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--seed", type=int, default=SEED)
 
+    p.add_argument("--dry_run", action="store_true",
+                   help="Skip model loading; use stub outputs to test pipeline/IO logic.")
+
     return p.parse_args()
 
 
@@ -391,9 +394,28 @@ def main() -> None:
     print(f"[config] base={len(base_items)} style={len(style_items)} "
           f"topics={len(topic_items)} num_init_prompts={args.num_init_prompts} "
           f"=> {total_rows} total rows")
-    print(f"[model] loading {args.model} device_map={args.device_map}")
+    if args.dry_run:
+        print("[dry_run] skipping model loading — stub outputs will be used", flush=True)
+        tok = model = None
+    else:
+        print(f"[model] loading {args.model} device_map={args.device_map}")
+        tok, model = load_qwen(args.model, device_map=args.device_map)
 
-    tok, model = load_qwen(args.model, device_map=args.device_map)
+    def _gen(prompt: str, key: str, tag: str) -> Optional[str]:
+        if args.dry_run:
+            return f"[DRY_RUN {key} for {tag}]"
+        return generate_with_retries_qwen(
+            tokenizer=tok,
+            model=model,
+            prompt=prompt,
+            key=key,
+            banned=banned,
+            tag=tag,
+            max_retries=args.max_retries,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_new_tokens=args.max_new_tokens,
+        )
 
     # cache system_llm1 once per (base_key, style_key)
     sys_cache: Dict[str, str] = {}
@@ -419,18 +441,7 @@ def main() -> None:
                         BASE_PERSONA_JSON=base_json,
                         STYLE_JSON=style_json,
                     )
-                    sys_llm1 = generate_with_retries_qwen(
-                        tokenizer=tok,
-                        model=model,
-                        prompt=prompt_sys,
-                        key="system_llm1",
-                        banned=banned,
-                        tag=f"{cache_key}|system_llm1",
-                        max_retries=args.max_retries,
-                        temperature=args.temperature,
-                        top_p=args.top_p,
-                        max_new_tokens=args.max_new_tokens,
-                    )
+                    sys_llm1 = _gen(prompt_sys, "system_llm1", f"{cache_key}|system_llm1")
                     if sys_llm1 is None:
                         print(f"[skip] system_llm1 failed for {cache_key}")
                         continue
@@ -456,18 +467,7 @@ def main() -> None:
                             STYLE_JSON=style_json,
                             TOPIC_JSON=topic_json,
                         )
-                        init_user = generate_with_retries_qwen(
-                            tokenizer=tok,
-                            model=model,
-                            prompt=prompt_init,
-                            key="init_user_message",
-                            banned=banned,
-                            tag=f"{persona_id}|init_user_message",
-                            max_retries=args.max_retries,
-                            temperature=args.temperature,
-                            top_p=args.top_p,
-                            max_new_tokens=args.max_new_tokens,
-                        )
+                        init_user = _gen(prompt_init, "init_user_message", f"{persona_id}|init_user_message")
                         if init_user is None:
                             print(f"[skip] init_user_message failed for {persona_id}")
                             continue

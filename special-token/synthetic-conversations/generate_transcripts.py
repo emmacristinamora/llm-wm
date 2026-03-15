@@ -101,7 +101,7 @@ def parse_args() -> argparse.Namespace:
     # generation knobs
     p.add_argument("--assistant_max_new_tokens", type=int, default=900)
     p.add_argument("--assistant_temp", type=float, default=0.7)
-    p.add_argument("--user_max_new_tokens", type=int, default=220)
+    p.add_argument("--user_max_new_tokens", type=int, default=400)
     p.add_argument("--user_temp", type=float, default=0.8)
 
     p.add_argument("--verbose", action="store_true")
