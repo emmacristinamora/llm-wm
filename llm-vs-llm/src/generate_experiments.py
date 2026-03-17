@@ -32,13 +32,54 @@ BASE_DIR = Path(__file__).parent.parent
 CONFIG_DIR = BASE_DIR / "config"
 ATTRIBUTES_YAML = CONFIG_DIR / "hidden_persona_attributes.yaml"
 PROMPTS_YAML = CONFIG_DIR / "prompts.yaml"
-OUT_FILE = BASE_DIR / "experiments.jsonl"
+OUT_FILE = BASE_DIR / "experiments_inv_none.jsonl"
 
 # BASE_PERSONA_ID = "bp_tech_starter"
 # if None, use ALL base personas found in hidden_persona_attributes.yaml
 BASE_PERSONA_IDS = None  
-INVESTIGATOR_MODES = ["none", "guided", "unguided"]
+#INVESTIGATOR_MODES = ["none", "guided", "unguided"]
+INVESTIGATOR_MODES = ["none"]  # for special token experiment, the guided and unguided modes are irrelevant
 LIMIT_STYLES = None  # 2 for debugging
+
+# currently 10 subtopics/persona, so 10 conversations/persona
+SUBTOPICS_BY_BASE_PERSONA = {
+    "bp_tech_starter": [
+        "cloud storage",
+        "cloud computing for small businesses",
+        "smartphones and basic phone functionality",
+        "how mobile apps work",
+        "home Wi-Fi and routers",
+        "home backups and file storage",
+        "smart home devices",
+        "device security and passwords",
+        "laptops and basic computer use",
+        "how data is stored on devices",
+    ],
+    "bp_career_builder": [
+        "transition into data analytics",
+        "project management career paths",
+        "product management career paths",
+        "switching into tech roles",
+        "remote work trade-offs",
+        "freelance versus full-time work",
+        "skill gaps for a career pivot",
+        "salary versus growth trade-offs",
+        "stability versus flexibility in career choices",
+        "hybrid roles combining strategy and execution",
+    ],
+    "bp_traveler": [
+        "week-long itinerary planning",
+        "short city-break itinerary planning",
+        "balancing food and sightseeing",
+        "transport logistics between sites",
+        "budget-conscious trip planning",
+        "avoiding overcrowded tourist spots",
+        "travel planning during peak season",
+        "balancing rest and activity while traveling",
+        "choosing between day trips and staying local",
+        "building a practical travel schedule",
+    ],
+}
 
 # model config
 MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
@@ -102,8 +143,8 @@ def load_existing_jsonl_ids(path: Path) -> set:
                 continue
     return ids
 
-def make_persona_id(base_persona_id: str, style_id: str, investigator_mode: str) -> str:
-    return f"{base_persona_id}__{style_id}__inv_{investigator_mode}"
+def make_persona_id(base_persona_id: str, style_id: str, experiment_idx: int, investigator_mode: str) -> str:
+    return f"{base_persona_id}__{style_id}__exp_{experiment_idx}__inv_{investigator_mode}"
 
 
 # LLM2 system prompt builder
@@ -298,6 +339,7 @@ def generate_with_retries_qwen(
 # === 4. MAIN EXECUTION ===
 
 def main():
+    set_seed(SEED)
     # load configs
     print(f"[load] attributes from {ATTRIBUTES_YAML}")
     attrs_cfg = read_yaml(ATTRIBUTES_YAML)
@@ -344,23 +386,34 @@ def main():
     tokenizer, model = load_qwen(MODEL_NAME, device_map=DEVICE_MAP)
 
     # cache llm1 outputs once per (base_persona_id, style_id) 
-    llm1_cache: Dict[str, Dict[str, str]] = {}
+    #llm1_cache: Dict[str, Dict[str, str]] = {}
+
+    # only cache system_llm1
+    system_llm1_cache: Dict[str, str] = {}
 
     written = 0
-    total = len(base_persona_items) * len(style_items) * len(INVESTIGATOR_MODES)
+    #total = len(base_persona_items) * len(style_items) * NUM_EXPERIMENTS_PER_PERSONA * len(INVESTIGATOR_MODES)
+    total = sum(
+    len(SUBTOPICS_BY_BASE_PERSONA[base_persona_id]) * len(style_items) * len(INVESTIGATOR_MODES)
+    for base_persona_id, _ in base_persona_items
+)
     idx = 0
 
     with OUT_FILE.open("a", encoding="utf-8") as f_out:
         for base_persona_id, base_persona in base_persona_items:
+            subtopics = SUBTOPICS_BY_BASE_PERSONA.get(base_persona_id)
+            if not subtopics:
+                raise ValueError(f"No subtopics defined for {base_persona_id}")
+            
             for style_id, style_obj in style_items:
                 cache_key = f"{base_persona_id}__{style_id}"
 
                 base_persona_json = json_dumps_compact(base_persona)
                 style_json = json_dumps_compact(style_obj)
 
-                # generate llm1 prompts once per style (cache miss)
-                if cache_key not in llm1_cache:
-                    print(f"\n[cache miss] generating llm1 prompts for {cache_key}")
+                # generate system_llm1 prompt once per (base_persona_id, style_id)
+                if cache_key not in system_llm1_cache:
+                    print(f"\n[cache miss] generating system_llm1 for {cache_key}")
 
                     prompt_sys = render_prompt(
                         tmpl_sys_llm1,
@@ -381,10 +434,25 @@ def main():
                         print(f"[skip] {cache_key} system_llm1 failed leakage checks")
                         continue
 
+                    system_llm1_cache[cache_key] = system_llm1
+                else:
+                    print(f"[cache hit] reusing system_llm1 for {cache_key}")
+
+                system_llm1 = system_llm1_cache[cache_key]
+                
+                # generate multiple different init_user_message values per persona/style
+                for experiment_idx, subtopic in enumerate(subtopics):
+                    exp_key = f"{cache_key}__exp_{experiment_idx}"
+                    print(f"[exp] generating init_user_message for {exp_key}")
+
                     prompt_user = render_prompt(
                         tmpl_init_user,
                         BASE_PERSONA_JSON=base_persona_json,
                         STYLE_JSON=style_json,
+                    ) + (
+                        f'\nThe initial user message must be specifically about this subtopic: "{subtopic}".\n'
+                        "It must be concrete, natural, and clearly centered on that subtopic.\n"
+                        "Do not produce a generic question about the broader domain.\n"
                     )
                     init_user_message = generate_with_retries_qwen(
                         tokenizer=tokenizer,
@@ -392,62 +460,64 @@ def main():
                         prompt=prompt_user,
                         key="init_user_message",
                         banned=banned_strings,
-                        persona_id=cache_key,
+                        persona_id=exp_key,
                         label="init_user_message",
                         max_retries=MAX_RETRIES,
                     )
                     if init_user_message is None:
-                        print(f"[skip] {cache_key} init_user_message failed leakage checks")
+                        print(f"[skip] {exp_key} init_user_message failed leakage checks")
                         continue
 
-                    llm1_cache[cache_key] = {
-                        "system_llm1": system_llm1,
-                        "init_user_message": init_user_message,
-                    }
-                else:
-                    print(f"[cache hit] reusing llm1 prompts for {cache_key}")
+                    #system_llm1_cache[cache_key] = {
+                        #"system_llm1": system_llm1,
+                        #"init_user_message": init_user_message,
+                    #}
+                #else:
+                    #print(f"[cache hit] reusing llm1 prompts for {cache_key}")
 
-                system_llm1 = llm1_cache[cache_key]["system_llm1"]
-                init_user_message = llm1_cache[cache_key]["init_user_message"]
+                #system_llm1 = system_llm1_cache[cache_key]
+                #init_user_message = llm1_cache[cache_key]["init_user_message"]
 
-                # now only vary llm2 investigator mode
-                for inv_mode in INVESTIGATOR_MODES:
-                    idx += 1
-                    persona_id = make_persona_id(base_persona_id, style_id, inv_mode)
+                    # now only vary llm2 investigator mode
+                    for inv_mode in INVESTIGATOR_MODES:
+                        idx += 1
+                        persona_id = make_persona_id(base_persona_id, style_id, experiment_idx, inv_mode)
 
-                    if persona_id in existing_ids:
-                        print(f"[{idx}/{total}] [skip] {persona_id} already exists")
-                        continue
+                        if persona_id in existing_ids:
+                            print(f"[{idx}/{total}] [skip] {persona_id} already exists")
+                            continue
 
-                    print(f"[{idx}/{total}] [gen] persona_id={persona_id}")
+                        print(f"[{idx}/{total}] [gen] persona_id={persona_id}")
 
-                    system_llm2 = build_llm2_system_prompt(
-                        prompts_cfg=prompts_cfg,
-                        investigator_mode=inv_mode,
-                        style_ids=style_ids,
-                        style_names=style_names,
-                    )
+                        system_llm2 = build_llm2_system_prompt(
+                            prompts_cfg=prompts_cfg,
+                            investigator_mode=inv_mode,
+                            style_ids=style_ids,
+                            style_names=style_names,
+                        )
 
-                    row = {
-                        "persona_id": persona_id,
-                        "profile": {
-                            "base_persona_id": base_persona_id,
-                            "style_id": style_id,
-                            "investigator_mode": inv_mode,
-                            "base_persona": base_persona,
-                            "style": style_obj,
-                        },
-                        "system_llm1": system_llm1,
-                        "system_llm2": system_llm2,
-                        "init_user_message": init_user_message,
-                    }
+                        row = {
+                            "persona_id": persona_id,
+                            "profile": {
+                                "base_persona_id": base_persona_id,
+                                "style_id": style_id,
+                                "investigator_mode": inv_mode,
+                                "experiment_idx": experiment_idx,
+                                "base_persona": base_persona,
+                                "style": style_obj,
+                                "subtopic": subtopic,
+                            },
+                            "system_llm1": system_llm1,
+                            "system_llm2": system_llm2,
+                            "init_user_message": init_user_message,
+                        }
 
-                    f_out.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    f_out.flush()
+                        f_out.write(json.dumps(row, ensure_ascii=False) + "\n")
+                        f_out.flush()
 
-                    existing_ids.add(persona_id)
-                    written += 1
-                    print(f"[write] wrote row #{written}: {persona_id}")
+                        existing_ids.add(persona_id)
+                        written += 1
+                        print(f"[write] wrote row #{written}: {persona_id}")
 
     print(f"\n[done] wrote {written} new rows to {OUT_FILE}")
 

@@ -3,6 +3,7 @@
 # === 1. IMPORTS ===
 
 import json
+from pyexpat.errors import messages
 import time
 import random
 import re
@@ -242,7 +243,34 @@ def infer_investigator_mode(persona_id: str, profile: Dict) -> Optional[str]:
         return persona_id.split("__")[-1].replace("inv_", "")
     except Exception:
         return profile.get("investigator_mode")
-    
+
+def summarize_history_for_user(messages: list[dict]) -> str:
+    user_questions = []
+    assistant_points = []
+
+    for m in messages:
+        if m["role"] == "user":
+            user_questions.append(m["content"].strip())
+        elif m["role"] == "assistant":
+            assistant_points.append(m["content"].strip())
+
+    # keep only recent items to avoid huge prompts
+    recent_user = user_questions[-4:]
+    recent_assistant = assistant_points[-3:]
+
+    out = "Previously asked by the user:\n"
+    for i, x in enumerate(recent_user, 1):
+        out += f"{i}. {x}\n"
+
+    out += "\nRecently answered by the assistant:\n"
+    for i, x in enumerate(recent_assistant, 1):
+        short_x = x.replace("\n", " ")
+        if len(short_x) > 220:
+            short_x = short_x[:220] + "..."
+        out += f"{i}. {short_x}\n"
+
+    return out.strip()
+
 def generate_conversation_with_persona(
     user_model, user_tok,
     assistant_model, assistant_tok,
@@ -294,16 +322,26 @@ def generate_conversation_with_persona(
             "confidence": inv["confidence"],
             "raw_line": inv["raw_line"],
         })
-
+    
     # additional constraint so the user doesn't become assistant
     TASK_PROMPT_USER = """\
 You are the USER in this conversation (not the assistant).
-Write ONLY the user's next message responding to the assistant.
+Write ONLY the user's next message.
 
-Constraints:
-- 2 sentences (max 80 words).
-- You may ask a question, accept/reject, request changes, or clarify.
-- Do NOT write an answer/solution or continue the assistant's output.
+Requirements:
+- Write 1 or 2 sentences, max 50 words.
+- Respond naturally to the FULL conversation so far, not just the last assistant message.
+- Do NOT repeat or restate a question that was already asked earlier.
+- Use the conversation summary below to avoid repetition.
+- Do NOT ask for the same example, definition, or explanation again in different words.
+- Your next message should do one of these:
+  1) ask a narrower follow-up,
+  2) introduce a concrete constraint or scenario,
+  3) ask for a comparison,
+  4) ask for a practical recommendation,
+  5) shift to a closely related sub-question.
+- If the last assistant answer already addressed the most recent question, move the conversation forward.
+- Do NOT answer your own question.
 - Do NOT write "Assistant:" or anything except the user message.
 """.strip()
 
@@ -311,17 +349,31 @@ Constraints:
 
     # alternate user/assistant until we have num_turns user messages total
     for _ in range(num_turns - 1):
+        history_summary = summarize_history_for_user(messages)
 
+        user_messages = [
+            {"role": "system", "content": system_llm1},
+            {"role": "user", "content": (
+                TASK_PROMPT_USER
+                + "\n\nConversation progress so far:\n"
+                + history_summary
+                + "\n\nAssistant just said:\n"
+                + messages[-1]["content"]
+                + "\n\nWrite the user's next message. It must not repeat an already-asked question."
+            )},
+        ]
+        """
         # user reacts based on persona instructions + last assistant message only
         user_messages = [
             {"role": "system", "content": system_llm1},
             {"role": "user", "content": (
                 TASK_PROMPT_USER
-                + "\n\nAssistant just said:\n"
-                + messages[-1]["content"]
+                + "\n\nFull conversation so far:\n"
+                + transcript_so_far
                 + "\n\nNow write the user's next message:"
             )},
         ]
+        """
 
         if verbose:
             print(f"[{tag}] user_turn generating...", flush=True)

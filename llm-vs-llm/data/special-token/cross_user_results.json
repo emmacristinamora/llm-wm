@@ -1,0 +1,17 @@
+{
+  "bp_career_builder__st_formal": {
+    "bp_career_builder__st_formal": 2.1731,
+    "bp_tech_starter__st_formal": 2.0601,
+    "bp_traveler__st_skeptical": 2.1873
+  },
+  "bp_tech_starter__st_formal": {
+    "bp_career_builder__st_formal": 2.2069,
+    "bp_tech_starter__st_formal": 2.0463,
+    "bp_traveler__st_skeptical": 2.19
+  },
+  "bp_traveler__st_skeptical": {
+    "bp_career_builder__st_formal": 2.1694,
+    "bp_tech_starter__st_formal": 2.0657,
+    "bp_traveler__st_skeptical": 2.147
+  }
+}

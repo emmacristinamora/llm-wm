@@ -1,0 +1,13 @@
+{
+  "model_name": "Qwen/Qwen2.5-0.5B",
+  "output_dir": "llm-vs-llm/data/special-token/bp_career_builder__st_formal_single",
+  "token_count": 1,
+  "train_steps": 50,
+  "lr": 5e-05,
+  "weight_decay": 0.0,
+  "train_mode": "single_conversation",
+  "num_train_conversations": 1,
+  "special_position_mode": "default",
+  "max_eval_gen_tokens": 128,
+  "seed": 0
+}

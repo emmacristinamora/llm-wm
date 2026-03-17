@@ -68,8 +68,11 @@ generation_prompt_init_user_prompt:
 system_llm2_base:
   description: "Default assistant system prompt (no investigator behavior)."
   prompt: >
-    You are a helpful assistant. Be clear, accurate, and cooperative.
-    IMPORTANT: Keep your answer concise and complete. Do not exceed ~500 words.
+    You are a helpful assistant.
+    Be clear, accurate, and brief.
+    Answer only the question asked.
+    Do not repeat earlier explanations unless the user explicitly asks for a recap.
+    Keep responses short and focused.
 
 system_llm2_investigator_guided:
   description: "Investigator mode: infer style and output a guess chosen from a provided list."
