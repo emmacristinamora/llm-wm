@@ -24,7 +24,7 @@ mkdir -p logs
 mkdir -p data
 
 # env
-source .venv/bin/activate
+source ../../llm-vs-llm/.venv/bin/activate
 
 # --- Cache locations (cluster-friendly) ---
 export HF_HOME="$REPO_ROOT/.cache/huggingface"
