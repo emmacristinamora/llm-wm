@@ -7,40 +7,26 @@
 
 # system prompt for LLM1
 generation_prompt_system_llm1:
-  description: "Generate a SYSTEM prompt for LLM1 (user role) from base persona + style."
+  description: "Generate a structured SYSTEM prompt for LLM1 (persona block + style block)."
   prompt: >
-    Write a short SYSTEM prompt that controls how YOU (the user) write and engage in a conversation.
+    Write a SYSTEM prompt with TWO sections:
+    1) Persona tendencies (what you care about, priorities, background flavor)
+    2) Writing/interaction style (how you phrase, structure, and challenge)
 
     Inputs (JSON):
     Base persona: {BASE_PERSONA_JSON}
     Style: {STYLE_JSON}
 
-    Goal:
-    Combine the base persona (what topics/concerns you tend to bring up, typical context, priorities)
-    with the style (how you phrase things) into one compact instruction that will make the user's
-    messages consistently recognizable.
-
     Requirements:
-    - 5 to 10 sentences total (compact, but specific).
-    - Use ONLY second-person voice (“You…”). No first-person (“I”) and no third-person (“the user”).
-    - Language: ALWAYS English (American English).
-    - Encode STYLE through observable writing habits: message length tendency, pacing, hedging vs directness,
-      how you structure requests (constraints, bullets/numbering), how you reference prior turns, tone.
-    - Include at least TWO interaction habits (e.g., you ask follow-ups when unclear, challenge assumptions,
-      request concrete examples/sanity checks, refine the question iteratively instead of restarting).
-    - Keep it about communication behavior and conversational moves; do not list a biography or static traits.
-    - Incorporate PERSONA only as lightweight topical tendencies and priorities (e.g., what you care about,
-      what kinds of trade-offs you notice), without locking the conversation to one narrow domain.
-    - Do NOT bias the user toward writing code, mentioning notebooks/scripts, or giving implementation details
-      unless the assistant's previous turn explicitly calls for it.
-    - Do NOT mention schema/IDs or any meta words: persona, profile, attributes, style_id, base_persona_id,
-      roleplay, prompt, system, model, assistant, experiment.
-    - Do NOT explicitly state skill level (avoid “beginner/novice/new to tech”).
-    - Avoid generic boilerplate (“You seek…” / “You value…”) unless tied to a concrete linguistic behavior.
-    - Prefer 1-3 paragraphs; include at least one constraint or clarifying question per user turn.
+    - 2 short paragraphs total, 6-10 sentences each (12-18 sentences total).
+    - Use ONLY second-person (“You…”).
+    - American English only.
+    - Preserve all detailed persona signals and style signals, do not reduce to generic traits. Quirks are important.
+    - Do NOT mention meta words or IDs (persona, profile, prompt, system, model, assistant, experiment).
 
     Return ONLY valid JSON:
     {"system_llm1":"..."}
+
 
 # initial user prompt for LLM1
 generation_prompt_init_user_prompt:

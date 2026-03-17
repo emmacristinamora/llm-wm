@@ -219,6 +219,7 @@ Write ONLY the user's next message responding to the assistant.
 Constraints:
 - Write 3-6 sentences (aim ~80-140 words). If a shorter reply is truly natural, keep it >= 2 sentences.
 - Stay in American English.
+- Stay within the topic of the conversation, do not go into unrelated/very niche topics.
 - You may ask a question, accept/reject, request changes, add a constraint, or clarify.
 - Include at least ONE of the following in each message:
   (a) a constraint or evaluation criterion, OR
