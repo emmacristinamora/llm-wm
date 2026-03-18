@@ -1,9 +1,9 @@
-# src/evaluate.py
-
 # === IMPORTS ===
 
 from typing import Any, Dict, List, Optional
+
 import torch
+
 try:
     from sentence_transformers import SentenceTransformer, util as st_util
     SENTENCE_TRANSFORMERS_AVAILABLE = True
@@ -28,10 +28,13 @@ def compute_eval_loss(
     total_examples = 0
     special_token_ids = special_token_ids or []
 
-    for batch in dataloader:
+    for batch_idx, batch in enumerate(dataloader):
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
         labels = batch["labels"].to(device)
+
+        if (labels != -100).sum().item() == 0:
+            raise ValueError(f"Eval batch {batch_idx} has no supervised tokens.")
 
         forward_kwargs = {
             "input_ids": input_ids,
@@ -49,6 +52,9 @@ def compute_eval_loss(
 
         outputs = model(**forward_kwargs)
         loss = outputs.loss
+
+        if torch.isnan(loss) or torch.isinf(loss):
+            raise ValueError(f"NaN/Inf eval loss encountered in batch {batch_idx}.")
 
         batch_size = input_ids.shape[0]
         total_loss += loss.item() * batch_size
@@ -74,6 +80,7 @@ def generate_predictions(
     special_token_ids: Optional[List[int]] = None,
     build_position_ids_fn=None,
     max_examples: Optional[int] = 100,
+    max_input_length: int = 1024,
 ) -> List[Dict[str, Any]]:
     model.eval()
 
@@ -90,7 +97,7 @@ def generate_predictions(
             prompt_text,
             add_special_tokens=True,
             truncation=True,
-            max_length=tokenizer.model_max_length if tokenizer.model_max_length < 100000 else 2048,
+            max_length=max_input_length,
             return_tensors="pt",
         )
 
@@ -196,6 +203,7 @@ def evaluate_run(
     top_p: float = 0.95,
     max_generation_examples: int = 100,
     cosine_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+    max_input_length: int = 1024,
 ) -> Dict[str, Any]:
     eval_loss = compute_eval_loss(
         model=model,
@@ -220,6 +228,7 @@ def evaluate_run(
         special_token_ids=special_token_ids,
         build_position_ids_fn=build_position_ids_fn,
         max_examples=max_generation_examples,
+        max_input_length=max_input_length,
     )
 
     cosine_metrics = compute_mean_cosine_similarity(

@@ -4,6 +4,7 @@ import math
 import random
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import (
@@ -122,6 +123,76 @@ def build_full_text(
     return full_text
 
 
+# === SAFE TOKENIZATION ===
+
+def build_training_example_tensors(
+    tokenizer,
+    example: Dict[str, Any],
+    special_tokens: List[str],
+    token_placement: str,
+    max_length: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Build one supervised example while preserving the target under truncation.
+
+    Strategy:
+    - tokenize prompt and target separately (without special tokens)
+    - if too long, truncate prompt from the LEFT
+    - then concatenate:
+        [BOS?] + prompt_ids + target_ids
+    - labels mask prompt tokens and supervise target tokens only
+    """
+    prompt_text = build_prompt_text(
+        example=example,
+        special_tokens=special_tokens,
+        token_placement=token_placement,
+    )
+    target_text = " " + example["target_message"].strip()
+
+    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+    target_ids = tokenizer.encode(target_text, add_special_tokens=False)
+
+    if len(target_ids) == 0:
+        return None
+
+    bos_ids = []
+    if tokenizer.bos_token_id is not None:
+        bos_ids = [tokenizer.bos_token_id]
+
+    available_for_prompt = max_length - len(bos_ids) - len(target_ids)
+
+    # If target alone does not fit, skip this example.
+    if available_for_prompt < 0:
+        return None
+
+    if len(prompt_ids) > available_for_prompt:
+        prompt_ids = prompt_ids[-available_for_prompt:] if available_for_prompt > 0 else []
+
+    input_ids_list = bos_ids + prompt_ids + target_ids
+    input_ids = torch.tensor(input_ids_list, dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids)
+
+    labels = input_ids.clone()
+    prompt_token_count = len(bos_ids) + len(prompt_ids)
+    labels[:prompt_token_count] = -100
+
+    if (labels != -100).sum().item() == 0:
+        return None
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+        "metadata": {
+            "example_id": example.get("example_id"),
+            "transcript_id": example.get("transcript_id"),
+            "user_turn_number": example.get("user_turn_number"),
+            "target_message": example.get("target_message"),
+            "prompt_text": prompt_text,
+        },
+    }
+
+
 # === DATASET ===
 
 class NextUserTurnDataset(Dataset):
@@ -133,66 +204,41 @@ class NextUserTurnDataset(Dataset):
         token_placement: str,
         max_length: int,
     ):
-        self.examples = examples
         self.tokenizer = tokenizer
         self.special_tokens = special_tokens
         self.token_placement = token_placement
         self.max_length = max_length
 
+        processed_examples = []
+        dropped_no_target = 0
+
+        for example in examples:
+            item = build_training_example_tensors(
+                tokenizer=tokenizer,
+                example=example,
+                special_tokens=special_tokens,
+                token_placement=token_placement,
+                max_length=max_length,
+            )
+            if item is None:
+                dropped_no_target += 1
+            else:
+                processed_examples.append(item)
+
+        self.items = processed_examples
+        self.dropped_no_target = dropped_no_target
+
     def __len__(self) -> int:
-        return len(self.examples)
+        return len(self.items)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
-        example = self.examples[idx]
-
-        prompt_text = build_prompt_text(
-            example=example,
-            special_tokens=self.special_tokens,
-            token_placement=self.token_placement,
-        )
-        full_text = build_full_text(
-            example=example,
-            special_tokens=self.special_tokens,
-            token_placement=self.token_placement,
-        )
-
-        prompt_enc = self.tokenizer(
-            prompt_text,
-            add_special_tokens=True,
-            truncation=True,
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
-        full_enc = self.tokenizer(
-            full_text,
-            add_special_tokens=True,
-            truncation=True,
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
-
-        input_ids = full_enc["input_ids"][0]
-        attention_mask = full_enc["attention_mask"][0]
-        labels = input_ids.clone()
-
-        prompt_len = prompt_enc["input_ids"].shape[1]
-        labels[:prompt_len] = -100
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "metadata": {
-                "example_id": example.get("example_id"),
-                "transcript_id": example.get("transcript_id"),
-                "user_turn_number": example.get("user_turn_number"),
-                "target_message": example.get("target_message"),
-                "prompt_text": prompt_text,
-            },
-        }
+        return self.items[idx]
 
 
 def collate_batch(batch: List[Dict[str, Any]], pad_token_id: int) -> Dict[str, Any]:
+    if len(batch) == 0:
+        raise ValueError("Received empty batch in collate_batch.")
+
     max_len = max(item["input_ids"].shape[0] for item in batch)
 
     input_ids_list = []
@@ -231,10 +277,14 @@ def collate_batch(batch: List[Dict[str, Any]], pad_token_id: int) -> Dict[str, A
         labels_list.append(labels)
         metadata_list.append(item["metadata"])
 
+    labels_tensor = torch.stack(labels_list, dim=0)
+    if (labels_tensor != -100).sum().item() == 0:
+        raise ValueError("Batch has no supervised tokens after padding/masking.")
+
     return {
         "input_ids": torch.stack(input_ids_list, dim=0),
         "attention_mask": torch.stack(attention_mask_list, dim=0),
-        "labels": torch.stack(labels_list, dim=0),
+        "labels": labels_tensor,
         "metadata": metadata_list,
     }
 
@@ -364,6 +414,13 @@ def run_training(
         max_length=config.max_length,
     ) if len(test_examples) > 0 else None
 
+    if len(train_dataset) == 0:
+        raise ValueError("Training dataset is empty after filtering invalid/truncated examples.")
+    if len(val_dataset) == 0:
+        raise ValueError("Validation dataset is empty after filtering invalid/truncated examples.")
+    if test_dataset is not None and len(test_dataset) == 0:
+        test_dataset = None
+
     collate_fn = lambda batch: collate_batch(batch, tokenizer.pad_token_id)
 
     train_loader = DataLoader(
@@ -409,15 +466,19 @@ def run_training(
             top_p=config.top_p,
             max_generation_examples=config.max_generation_examples,
             cosine_model_name=config.cosine_model_name,
+            max_input_length=config.max_length,
         )
 
         results = {
             "config": asdict(config),
             "special_tokens": [],
             "special_token_ids": [],
-            "n_train_examples": len(train_examples),
-            "n_val_examples": len(val_examples),
-            "n_test_examples": len(test_examples),
+            "n_train_examples": len(train_dataset),
+            "n_val_examples": len(val_dataset),
+            "n_test_examples": len(test_dataset) if test_dataset is not None else 0,
+            "dropped_train_examples": train_dataset.dropped_no_target,
+            "dropped_val_examples": val_dataset.dropped_no_target,
+            "dropped_test_examples": test_dataset.dropped_no_target if test_dataset is not None else 0,
             "train_history": [],
             "best_val_loss": baseline_val["eval_loss"],
             "final_val_loss": baseline_val["eval_loss"],
@@ -443,6 +504,7 @@ def run_training(
                 top_p=config.top_p,
                 max_generation_examples=config.max_generation_examples,
                 cosine_model_name=config.cosine_model_name,
+                max_input_length=config.max_length,
             )
             results["final_test_loss"] = baseline_test["eval_loss"]
             results["test_generations"] = baseline_test["generations"]
@@ -451,13 +513,11 @@ def run_training(
         return results
 
     # === SPECIAL TOKEN TRAINING CASE ===
-    
+
     freeze_all_parameters(model)
     enable_input_embeddings(model)
     register_embedding_gradient_mask(model, special_token_ids)
 
-    # weight_decay=0 here: AdamW would decay ALL embedding rows, including frozen
-    # vocabulary embeddings. Instead we apply L2 manually to special token rows only.
     optimizer = torch.optim.AdamW(
         [model.get_input_embeddings().weight],
         lr=config.learning_rate,
@@ -501,9 +561,15 @@ def run_training(
                 )
 
             outputs = model(**forward_kwargs)
-            loss = outputs.loss / config.grad_accum_steps
+            loss = outputs.loss
 
-            # L2 penalty on special token embeddings only (not the full embedding matrix)
+            if torch.isnan(loss) or torch.isinf(loss):
+                raise ValueError(
+                    f"NaN/Inf training loss encountered at epoch={epoch}, step={step}, global_step={global_step}."
+                )
+
+            loss = loss / config.grad_accum_steps
+
             if config.weight_decay > 0 and len(special_token_ids) > 0:
                 st_ids = torch.tensor(special_token_ids, device=device)
                 st_emb = model.get_input_embeddings().weight[st_ids]
@@ -539,6 +605,7 @@ def run_training(
                         top_p=config.top_p,
                         max_generation_examples=min(20, config.max_generation_examples),
                         cosine_model_name=config.cosine_model_name,
+                        max_input_length=config.max_length,
                     )
 
                     log_row = {
@@ -553,7 +620,6 @@ def run_training(
                         best_val_loss = val_metrics["eval_loss"]
                         best_embedding_state = model.get_input_embeddings().weight.detach().cpu().clone()
 
-    # restore best embeddings
     if best_embedding_state is not None:
         model.get_input_embeddings().weight.data.copy_(best_embedding_state.to(device))
 
@@ -573,15 +639,19 @@ def run_training(
         top_p=config.top_p,
         max_generation_examples=config.max_generation_examples,
         cosine_model_name=config.cosine_model_name,
+        max_input_length=config.max_length,
     )
 
     results = {
         "config": asdict(config),
         "special_tokens": special_tokens,
         "special_token_ids": special_token_ids,
-        "n_train_examples": len(train_examples),
-        "n_val_examples": len(val_examples),
-        "n_test_examples": len(test_examples),
+        "n_train_examples": len(train_dataset),
+        "n_val_examples": len(val_dataset),
+        "n_test_examples": len(test_dataset) if test_dataset is not None else 0,
+        "dropped_train_examples": train_dataset.dropped_no_target,
+        "dropped_val_examples": val_dataset.dropped_no_target,
+        "dropped_test_examples": test_dataset.dropped_no_target if test_dataset is not None else 0,
         "train_history": train_history,
         "best_val_loss": best_val_loss,
         "final_val_loss": final_val["eval_loss"],
@@ -607,6 +677,7 @@ def run_training(
             top_p=config.top_p,
             max_generation_examples=config.max_generation_examples,
             cosine_model_name=config.cosine_model_name,
+            max_input_length=config.max_length,
         )
         results["final_test_loss"] = final_test["eval_loss"]
         results["test_generations"] = final_test["generations"]
