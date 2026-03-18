@@ -1,0 +1,44 @@
+[info] job_id=468624
+[info] node=gnode07
+[info] start=Wed Mar 18 10:29:32 AM CET 2026
+[info] partition=gpunew
+[load] personas=/home/3210604/projects/llm-wm/special-token/synthetic-conversations/config/personas.yaml
+[load] prompts=/home/3210604/projects/llm-wm/special-token/synthetic-conversations/config/prompts.yaml
+[out] /home/3210604/projects/llm-wm/special-token/synthetic-conversations/data/experiments.jsonl (existing rows: 0)
+[config] base=1 style=1 topics=10 num_init_prompts=1 => 10 total rows
+[model] loading Qwen/Qwen3-4B-Instruct-2507 device_map=auto
+
+[1/1] profile=Emma__Emma
+[cache miss] generating system_llm1 for Emma__Emma
+[ok] Emma__Emma|system_llm1 key=system_llm1 (attempt 1)
+[ok] Emma__Emma__career_learning__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #1: Emma__Emma__career_learning__init0
+[ok] Emma__Emma__productivity_habits__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #2: Emma__Emma__productivity_habits__init0
+[ok] Emma__Emma__relationships_communication__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #3: Emma__Emma__relationships_communication__init0
+[ok] Emma__Emma__health_wellbeing__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #4: Emma__Emma__health_wellbeing__init0
+[ok] Emma__Emma__travel_living_abroad__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #5: Emma__Emma__travel_living_abroad__init0
+[ok] Emma__Emma__personal_finance_basics__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #6: Emma__Emma__personal_finance_basics__init0
+[leak] Emma__Emma__tech_everyday__init0|init_user_message key=init_user_message leaked 'metadata' (attempt 1/4)
+[leak] Emma__Emma__tech_everyday__init0|init_user_message key=init_user_message leaked 'metadata' (attempt 2/4)
+[ok] Emma__Emma__tech_everyday__init0|init_user_message key=init_user_message (attempt 3)
+[write] wrote row #7: Emma__Emma__tech_everyday__init0
+[ok] Emma__Emma__current_events_civic__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #8: Emma__Emma__current_events_civic__init0
+[ok] Emma__Emma__ethics_decision_making__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #9: Emma__Emma__ethics_decision_making__init0
+[ok] Emma__Emma__creative_projects__init0|init_user_message key=init_user_message (attempt 1)
+[write] wrote row #10: Emma__Emma__creative_projects__init0
+
+[done] wrote 10 new rows -> /home/3210604/projects/llm-wm/special-token/synthetic-conversations/data/experiments.jsonl
+[load] 10 experiment rows from /home/3210604/projects/llm-wm/special-token/synthetic-conversations/data/experiments.jsonl
+[config] conversations_per_experiment=1 total_convs=10 num_turns=15
+[out] /home/3210604/projects/llm-wm/special-token/synthetic-conversations/data/transcripts.jsonl
+[model] loading user model: Qwen/Qwen3-4B-Instruct-2507
+[model] loading assistant model: Qwen/Qwen3-4B-Instruct-2507
+[done] wrote 10 conversations -> /home/3210604/projects/llm-wm/special-token/synthetic-conversations/data/transcripts.jsonl
+[info] end=Wed Mar 18 11:12:36 AM CET 2026
