@@ -456,10 +456,12 @@ def run_training(
     enable_input_embeddings(model)
     register_embedding_gradient_mask(model, special_token_ids)
 
+    # weight_decay=0 here: AdamW would decay ALL embedding rows, including frozen
+    # vocabulary embeddings. Instead we apply L2 manually to special token rows only.
     optimizer = torch.optim.AdamW(
         [model.get_input_embeddings().weight],
         lr=config.learning_rate,
-        weight_decay=config.weight_decay,
+        weight_decay=0.0,
     )
 
     num_update_steps_per_epoch = max(1, math.ceil(len(train_loader) / config.grad_accum_steps))
@@ -500,6 +502,13 @@ def run_training(
 
             outputs = model(**forward_kwargs)
             loss = outputs.loss / config.grad_accum_steps
+
+            # L2 penalty on special token embeddings only (not the full embedding matrix)
+            if config.weight_decay > 0 and len(special_token_ids) > 0:
+                st_ids = torch.tensor(special_token_ids, device=device)
+                st_emb = model.get_input_embeddings().weight[st_ids]
+                loss = loss + 0.5 * config.weight_decay * (st_emb ** 2).sum() / config.grad_accum_steps
+
             loss.backward()
 
             if (step + 1) % config.grad_accum_steps == 0:

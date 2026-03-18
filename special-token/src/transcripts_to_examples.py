@@ -81,9 +81,9 @@ def assign_turn_bucket(user_turn_number: int, total_user_turns: int) -> str:
 
     ratio = user_turn_number / total_user_turns
 
-    if ratio <= 0.33:
+    if ratio <= 1/3:
         return "early"
-    if ratio <= 0.66:
+    if ratio <= 2/3:
         return "middle"
     return "late"
 
@@ -136,7 +136,7 @@ def transcript_to_examples(
             "total_user_turns_in_transcript": total_user_turns,
             "user_turn_bucket": assign_turn_bucket(user_turn_number, total_user_turns),
             "persona_id": transcript.get("persona_id"),
-            "topic_id": transcript.get("topic_id"),
+            "topic_id": transcript.get("profile", {}).get("topic_id"),
             "profile": transcript.get("profile"),
             "metadata": {
                 "seed_prompt": transcript.get("seed_prompt"),
