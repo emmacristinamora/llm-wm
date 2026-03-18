@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=08:00:00
+#SBATCH --time=05:00:00
 #SBATCH --output=logs/gen_transcripts_%j.out
 #SBATCH --error=logs/gen_transcripts_%j.err
 #SBATCH --requeue
@@ -44,10 +44,15 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 # experiment generation
 python -u generate_experiments.py
 
+if [ ! -s data/experiments.jsonl ]; then
+  echo "[error] data/experiments.jsonl is empty — aborting"
+  exit 1
+fi
+
 # transcript generation
 python -u generate_transcripts.py \
-    --num_turns 20 \
-    --conversations_per_experiment 2 \
+    --num_turns 15 \
+    --conversations_per_experiment 1 \
     --assistant_max_new_tokens 900 \
     --user_max_new_tokens 400
 

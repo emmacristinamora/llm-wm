@@ -35,7 +35,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
 TEMPERATURE = 0.7
 TOP_P = 0.9
-MAX_NEW_TOKENS = 256
+MAX_NEW_TOKENS = 512
 MAX_RETRIES = 4
 SEED = 42
 DEVICE_MAP = "auto"
@@ -110,13 +110,11 @@ def collect_banned_strings(
         if s:
             bans.add(s)
 
-    # ban ids/keys so model doesn't output them
-    for k in base_keys:
-        bans.add(str(k))
-    for k in style_keys:
-        bans.add(str(k))
-    for k in topic_keys:
-        bans.add(str(k))
+    # ban snake_case IDs only (e.g. "career_learning", "bp_traveler")
+    # natural names like "Emma" are intentionally excluded — the model is allowed to use them
+    for k in base_keys + style_keys + topic_keys:
+        if "_" in str(k):
+            bans.add(str(k))
 
     # extra common meta leakage tokens
     for s in ["base_persona_id", "style_id", "persona_id", "profile",
@@ -177,7 +175,7 @@ def load_qwen(model_name: str, device_map: str = "auto") -> tuple[AutoTokenizer,
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map=device_map,
         trust_remote_code=True,
     )
