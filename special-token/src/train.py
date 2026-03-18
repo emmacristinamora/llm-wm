@@ -30,11 +30,11 @@ class TrainConfig:
     max_length: int = 1024
     batch_size: int = 1
     num_epochs: int = 3
-    learning_rate: float = 5e-3
+    learning_rate: float = 5e-4
     weight_decay: float = 0.0
     warmup_ratio: float = 0.05
     grad_accum_steps: int = 1
-    max_grad_norm: float = 1.0
+    max_grad_norm: float = 0.5
 
     eval_every_steps: int = 50
 
