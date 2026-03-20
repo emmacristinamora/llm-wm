@@ -1,0 +1,32 @@
+# mac
+.DS_Store
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# outputs / logs
+outputs/
+logs/
+out/
+err/
+
+# env / caches
+.env
+.venv/
+miniconda3/
+.micromamba/
+.hf_cache/
+.cache/
+huggingface/
+wandb/
+
+# notebooks outputs
+notebooks/**/.ipynb_checkpoints/
+
+# editor
+.vscode/
+.idea/
