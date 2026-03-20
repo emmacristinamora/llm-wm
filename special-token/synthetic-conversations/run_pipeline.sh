@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=gen_transcripts
-#SBATCH --partition=long-gpunew
+#SBATCH --partition=long_gpunew
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
