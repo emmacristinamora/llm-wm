@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=gen_transcripts
-#SBATCH --partition=long_gpunew
+#SBATCH --partition=gpunew
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
@@ -8,6 +8,8 @@
 #SBATCH --output=logs/gen_transcripts_%j.out
 #SBATCH --error=logs/gen_transcripts_%j.err
 #SBATCH --requeue
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=emmamora2003@gmail.com
 
 set -euo pipefail
 
