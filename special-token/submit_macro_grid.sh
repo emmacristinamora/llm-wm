@@ -65,23 +65,13 @@ python -u run_macro_grid.py \
   --repo_root . \
   --examples_path data/examples.jsonl \
   --runs_root data/runs \
-  --base_persona_ids Emma Maria \
-  --style_ids PickOne WhatIf \
-  --topic_ids \
-    career_learning \
-    productivity_habits \
-    relationships_communication \
-    health_wellbeing \
-    travel_living_abroad \
-    personal_finance_basics \
-    tech_everyday \
-    current_events_civic \
-    ethics_decision_making \
-    creative_projects \
+  --personas Emma,Maria \
+  --styles PickOne,WhatIf \
+  --topics career_learning,productivity_habits,relationships_communication,health_wellbeing,travel_living_abroad,personal_finance_basics,tech_everyday,current_events_civic,ethics_decision_making,creative_projects \
   --run_baseline \
   --baseline_token_placement after_context \
   --baseline_position_mode default \
-  --num_special_tokens_list 1 3 5 10 15 \
+  --token_counts 1 3 5 10 15 \
   --token_placements after_context \
   --position_modes shared_position \
   --model_name Qwen/Qwen2.5-0.5B \
