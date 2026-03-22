@@ -13,3 +13,4 @@ tiktoken
 sentencepiece
 huggingface_hub
 safetensors
+sentence-transformers
