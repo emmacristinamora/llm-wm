@@ -1,0 +1,133 @@
+{
+  "eval_config": {
+    "repo_root": ".",
+    "examples_path": "data/examples.jsonl",
+    "runs_root": "data/runs",
+    "evals_root": "data/evals",
+    "run_name": "Emma__PickOne__heldout_ethics_decision_making__tok10__after_context__shared_position__20260322_144449",
+    "allowed_personas": [
+      "Emma",
+      "Maria"
+    ],
+    "allowed_styles": [
+      "PickOne",
+      "WhatIf"
+    ],
+    "generation_max_new_tokens": 128,
+    "do_sample": false,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "sentence_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "max_length": 1024,
+    "batch_size": 1,
+    "max_examples_per_bucket": null,
+    "seed": 42,
+    "use_fp16": false,
+    "use_bf16": false,
+    "save_per_example": true
+  },
+  "run_name": "Emma__PickOne__heldout_ethics_decision_making__tok10__after_context__shared_position__20260322_144449",
+  "train_config": {
+    "repo_root": "/home/3210604/projects/llm-wm/special-token",
+    "examples_path": "data/examples.jsonl",
+    "runs_root": "data/runs",
+    "run_name": "Emma__PickOne__heldout_ethics_decision_making__tok10__after_context__shared_position__20260322_144449",
+    "base_persona_id": "Emma",
+    "style_id": "PickOne",
+    "held_out_topic_id": "ethics_decision_making",
+    "num_special_tokens": 10,
+    "special_token_base": "<st>",
+    "token_placement": "after_context",
+    "position_mode": "shared_position",
+    "model_name": "Qwen/Qwen2.5-0.5B",
+    "max_length": 1024,
+    "batch_size": 1,
+    "num_epochs": 3,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0,
+    "warmup_ratio": 0.05,
+    "grad_accum_steps": 1,
+    "max_grad_norm": 0.5,
+    "eval_every_steps": 20,
+    "seed": 42,
+    "use_fp16": false,
+    "use_bf16": false
+  },
+  "special_tokens": [
+    "<st>0",
+    "<st>1",
+    "<st>2",
+    "<st>3",
+    "<st>4",
+    "<st>5",
+    "<st>6",
+    "<st>7",
+    "<st>8",
+    "<st>9"
+  ],
+  "special_token_ids": [
+    151665,
+    151666,
+    151667,
+    151668,
+    151669,
+    151670,
+    151671,
+    151672,
+    151673,
+    151674
+  ],
+  "held_out_topic_id": "ethics_decision_making",
+  "trained_base_persona_id": "Emma",
+  "trained_style_id": "PickOne",
+  "is_baseline": false,
+  "bucket_summaries": {
+    "matched": {
+      "bucket_name": "matched",
+      "n_examples_raw": 28,
+      "n_examples_used": 28,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.5095655407224382,
+      "mean_generation_cosine_similarity": 0.32202059615935597,
+      "exact_match_rate": 0.0
+    },
+    "same_persona_diff_style": {
+      "bucket_name": "same_persona_diff_style",
+      "n_examples_raw": 28,
+      "n_examples_used": 28,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.8030091396399908,
+      "mean_generation_cosine_similarity": 0.48762730615479605,
+      "exact_match_rate": 0.0
+    },
+    "diff_persona_same_style": {
+      "bucket_name": "diff_persona_same_style",
+      "n_examples_raw": 28,
+      "n_examples_used": 28,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.842757863657815,
+      "mean_generation_cosine_similarity": 0.5650166081530708,
+      "exact_match_rate": 0.0
+    },
+    "diff_persona_diff_style": {
+      "bucket_name": "diff_persona_diff_style",
+      "n_examples_raw": 28,
+      "n_examples_used": 28,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 2.0555761541639055,
+      "mean_generation_cosine_similarity": 0.5525638237595558,
+      "exact_match_rate": 0.0
+    }
+  },
+  "matched_vs_control_deltas": {
+    "loss_delta_matched_minus_same_persona_diff_style": -0.29344359891755256,
+    "cosine_delta_matched_minus_same_persona_diff_style": -0.16560670999544008,
+    "exact_match_delta_matched_minus_same_persona_diff_style": 0.0,
+    "loss_delta_matched_minus_diff_persona_same_style": -0.3331923229353768,
+    "cosine_delta_matched_minus_diff_persona_same_style": -0.2429960119937148,
+    "exact_match_delta_matched_minus_diff_persona_same_style": 0.0,
+    "loss_delta_matched_minus_diff_persona_diff_style": -0.5460106134414673,
+    "cosine_delta_matched_minus_diff_persona_diff_style": -0.23054322760019985,
+    "exact_match_delta_matched_minus_diff_persona_diff_style": 0.0
+  }
+}
