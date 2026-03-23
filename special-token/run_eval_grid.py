@@ -1,6 +1,5 @@
 # special-token/run_eval_grid.py
 
-
 # === IMPORTS ===
 
 import argparse
@@ -42,7 +41,10 @@ def get_candidate_run_dirs(runs_root: Path) -> List[Path]:
     if not runs_root.exists():
         raise FileNotFoundError(f"runs_root does not exist: {runs_root}")
 
-    run_dirs = [p for p in runs_root.iterdir() if p.is_dir() and (p / "run_summary.json").exists()]
+    run_dirs = [
+        p for p in runs_root.iterdir()
+        if p.is_dir() and (p / "run_summary.json").exists()
+    ]
     return sorted(run_dirs)
 
 
@@ -144,6 +146,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--styles", type=str, default="")
     parser.add_argument("--topics", type=str, default="")
 
+    # New: explicitly separate run selection filters from evaluator control filters.
+    parser.add_argument("--allowed_personas", type=str, default="")
+    parser.add_argument("--allowed_styles", type=str, default="")
+
     parser.add_argument("--token_counts", type=int, nargs="*", default=[])
     parser.add_argument("--token_placements", type=str, nargs="*", default=[])
     parser.add_argument("--position_modes", type=str, nargs="*", default=[])
@@ -162,6 +168,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_examples_per_bucket", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
 
+    # New: optional instead of always being forced on.
+    parser.add_argument("--save_per_example", action="store_true")
+
     return parser.parse_args()
 
 
@@ -173,6 +182,9 @@ def main() -> None:
     personas = parse_csv_arg(args.personas)
     styles = parse_csv_arg(args.styles)
     topics = parse_csv_arg(args.topics)
+
+    allowed_personas = parse_csv_arg(args.allowed_personas)
+    allowed_styles = parse_csv_arg(args.allowed_styles)
 
     token_counts = parse_int_list(args.token_counts)
     token_placements = args.token_placements if args.token_placements else None
@@ -215,9 +227,12 @@ def main() -> None:
     print(f"[info] personas={personas}")
     print(f"[info] styles={styles}")
     print(f"[info] topics={topics}")
+    print(f"[info] allowed_personas={allowed_personas}")
+    print(f"[info] allowed_styles={allowed_styles}")
     print(f"[info] token_counts={token_counts}")
     print(f"[info] token_placements={token_placements}")
     print(f"[info] position_modes={position_modes}")
+    print(f"[info] save_per_example={args.save_per_example}")
     print("=" * 80)
 
     summary_path = evals_root / "eval_runs_summary.jsonl"
@@ -243,13 +258,23 @@ def main() -> None:
             "--generation_max_new_tokens", str(args.generation_max_new_tokens),
             "--sentence_model_name", str(args.sentence_model_name),
             "--seed", str(args.seed),
-            "--save_per_example",
         ]
 
-        if personas is not None:
+        if args.save_per_example:
+            cmd.append("--save_per_example")
+
+        # Prefer explicit allowed_* filters when provided.
+        # Otherwise fall back to the selected personas/styles.
+        if allowed_personas is not None:
+            cmd.extend(["--allowed_personas", ",".join(allowed_personas)])
+        elif personas is not None:
             cmd.extend(["--allowed_personas", ",".join(personas)])
-        if styles is not None:
+
+        if allowed_styles is not None:
+            cmd.extend(["--allowed_styles", ",".join(allowed_styles)])
+        elif styles is not None:
             cmd.extend(["--allowed_styles", ",".join(styles)])
+
         if args.max_examples_per_bucket is not None:
             cmd.extend(["--max_examples_per_bucket", str(args.max_examples_per_bucket)])
 
