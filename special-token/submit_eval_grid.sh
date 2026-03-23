@@ -81,6 +81,7 @@ python run_eval_grid.py \
   --include_trained \
   --allowed_personas Emma,Maria \
   --allowed_styles PickOne,WhatIf \
-  --save_per_example
+  --save_per_example \
+  --skip_existing
 
 echo "[info] end=$(date)"
