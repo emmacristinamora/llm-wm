@@ -1,0 +1,111 @@
+{
+  "eval_config": {
+    "repo_root": ".",
+    "examples_path": "data/examples.jsonl",
+    "runs_root": "data/runs",
+    "evals_root": "data/evals",
+    "run_name": "Emma__SoBasically__heldout_career_learning__tok0__after_context__default__20260322_003211",
+    "allowed_personas": [
+      "Emma",
+      "Maria"
+    ],
+    "allowed_styles": [
+      "PickOne",
+      "WhatIf"
+    ],
+    "generation_max_new_tokens": 128,
+    "do_sample": false,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "sentence_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "max_length": 1024,
+    "batch_size": 1,
+    "max_examples_per_bucket": null,
+    "seed": 42,
+    "use_fp16": false,
+    "use_bf16": false,
+    "save_per_example": true
+  },
+  "run_name": "Emma__SoBasically__heldout_career_learning__tok0__after_context__default__20260322_003211",
+  "train_config": {
+    "repo_root": ".",
+    "examples_path": "data/examples.jsonl",
+    "runs_root": "data/runs",
+    "run_name": "Emma__SoBasically__heldout_career_learning__tok0__after_context__default__20260322_003211",
+    "base_persona_id": "Emma",
+    "style_id": "SoBasically",
+    "held_out_topic_id": "career_learning",
+    "num_special_tokens": 0,
+    "special_token_base": "<st>",
+    "token_placement": "after_context",
+    "position_mode": "default",
+    "model_name": "Qwen/Qwen2.5-0.5B",
+    "max_length": 1024,
+    "batch_size": 1,
+    "num_epochs": 3,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0,
+    "warmup_ratio": 0.05,
+    "grad_accum_steps": 1,
+    "max_grad_norm": 0.5,
+    "eval_every_steps": 20,
+    "seed": 42,
+    "use_fp16": false,
+    "use_bf16": false
+  },
+  "special_tokens": [],
+  "special_token_ids": [],
+  "held_out_topic_id": "career_learning",
+  "trained_base_persona_id": "Emma",
+  "trained_style_id": "SoBasically",
+  "is_baseline": true,
+  "bucket_summaries": {
+    "matched": {
+      "bucket_name": "matched",
+      "n_examples_raw": 0,
+      "n_examples_used": 0,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": null,
+      "mean_generation_cosine_similarity": null,
+      "exact_match_rate": null
+    },
+    "same_persona_diff_style": {
+      "bucket_name": "same_persona_diff_style",
+      "n_examples_raw": 56,
+      "n_examples_used": 56,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 2.0529411200966154,
+      "mean_generation_cosine_similarity": 0.7069914931697505,
+      "exact_match_rate": 0.0
+    },
+    "diff_persona_same_style": {
+      "bucket_name": "diff_persona_same_style",
+      "n_examples_raw": 0,
+      "n_examples_used": 0,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": null,
+      "mean_generation_cosine_similarity": null,
+      "exact_match_rate": null
+    },
+    "diff_persona_diff_style": {
+      "bucket_name": "diff_persona_diff_style",
+      "n_examples_raw": 56,
+      "n_examples_used": 56,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 2.1945985151188716,
+      "mean_generation_cosine_similarity": 0.6232440673879215,
+      "exact_match_rate": 0.0
+    }
+  },
+  "matched_vs_control_deltas": {
+    "loss_delta_matched_minus_same_persona_diff_style": null,
+    "cosine_delta_matched_minus_same_persona_diff_style": null,
+    "exact_match_delta_matched_minus_same_persona_diff_style": null,
+    "loss_delta_matched_minus_diff_persona_same_style": null,
+    "cosine_delta_matched_minus_diff_persona_same_style": null,
+    "exact_match_delta_matched_minus_diff_persona_same_style": null,
+    "loss_delta_matched_minus_diff_persona_diff_style": null,
+    "cosine_delta_matched_minus_diff_persona_diff_style": null,
+    "exact_match_delta_matched_minus_diff_persona_diff_style": null
+  }
+}
