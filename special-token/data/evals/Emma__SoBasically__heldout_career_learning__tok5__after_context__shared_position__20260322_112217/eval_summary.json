@@ -1,0 +1,114 @@
+{
+  "eval_config": {
+    "repo_root": ".",
+    "examples_path": "data/examples.jsonl",
+    "runs_root": "data/runs",
+    "evals_root": "data/evals",
+    "run_name": "Emma__SoBasically__heldout_career_learning__tok5__after_context__shared_position__20260322_112217",
+    "generation_max_new_tokens": 128,
+    "do_sample": false,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "sentence_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "max_length": 1024,
+    "batch_size": 1,
+    "max_examples_per_bucket": null,
+    "seed": 42,
+    "use_fp16": false,
+    "use_bf16": false,
+    "save_per_example": true
+  },
+  "run_name": "Emma__SoBasically__heldout_career_learning__tok5__after_context__shared_position__20260322_112217",
+  "train_config": {
+    "repo_root": ".",
+    "examples_path": "data/examples.jsonl",
+    "runs_root": "data/runs",
+    "run_name": "Emma__SoBasically__heldout_career_learning__tok5__after_context__shared_position__20260322_112217",
+    "base_persona_id": "Emma",
+    "style_id": "SoBasically",
+    "held_out_topic_id": "career_learning",
+    "num_special_tokens": 5,
+    "special_token_base": "<st>",
+    "token_placement": "after_context",
+    "position_mode": "shared_position",
+    "model_name": "Qwen/Qwen2.5-0.5B",
+    "max_length": 1024,
+    "batch_size": 1,
+    "num_epochs": 3,
+    "learning_rate": 0.0005,
+    "weight_decay": 0.0,
+    "warmup_ratio": 0.05,
+    "grad_accum_steps": 1,
+    "max_grad_norm": 0.5,
+    "eval_every_steps": 20,
+    "seed": 42,
+    "use_fp16": false,
+    "use_bf16": false
+  },
+  "special_tokens": [
+    "<st>0",
+    "<st>1",
+    "<st>2",
+    "<st>3",
+    "<st>4"
+  ],
+  "special_token_ids": [
+    151665,
+    151666,
+    151667,
+    151668,
+    151669
+  ],
+  "held_out_topic_id": "career_learning",
+  "trained_base_persona_id": "Emma",
+  "trained_style_id": "SoBasically",
+  "bucket_summaries": {
+    "matched": {
+      "bucket_name": "matched",
+      "n_examples_raw": 28,
+      "n_examples_used": 28,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.7783593833446503,
+      "mean_generation_cosine_similarity": 0.5010380532060351,
+      "exact_match_rate": 0.0
+    },
+    "same_persona_diff_style": {
+      "bucket_name": "same_persona_diff_style",
+      "n_examples_raw": 56,
+      "n_examples_used": 56,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.7602886238268443,
+      "mean_generation_cosine_similarity": 0.5167728888003954,
+      "exact_match_rate": 0.0
+    },
+    "diff_persona_same_style": {
+      "bucket_name": "diff_persona_same_style",
+      "n_examples_raw": 56,
+      "n_examples_used": 56,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.8186157643795013,
+      "mean_generation_cosine_similarity": 0.590808255597949,
+      "exact_match_rate": 0.0
+    },
+    "diff_persona_diff_style": {
+      "bucket_name": "diff_persona_diff_style",
+      "n_examples_raw": 112,
+      "n_examples_used": 112,
+      "n_examples_dropped": 0,
+      "mean_teacher_forced_loss": 1.8496700935065746,
+      "mean_generation_cosine_similarity": 0.4363787897164002,
+      "exact_match_rate": 0.0
+    }
+  },
+  "matched_vs_control_deltas": {
+    "loss_delta_matched_minus_same_persona_diff_style": 0.018070759517806012,
+    "cosine_delta_matched_minus_same_persona_diff_style": -0.015734835594360286,
+    "exact_match_delta_matched_minus_same_persona_diff_style": 0.0,
+    "loss_delta_matched_minus_diff_persona_same_style": -0.040256381034851074,
+    "cosine_delta_matched_minus_diff_persona_same_style": -0.08977020239191391,
+    "exact_match_delta_matched_minus_diff_persona_same_style": 0.0,
+    "loss_delta_matched_minus_diff_persona_diff_style": -0.07131071016192436,
+    "cosine_delta_matched_minus_diff_persona_diff_style": 0.06465926348963491,
+    "exact_match_delta_matched_minus_diff_persona_diff_style": 0.0
+  }
+}
