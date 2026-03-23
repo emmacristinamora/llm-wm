@@ -32,15 +32,15 @@ notebooks/**/.ipynb_checkpoints/
 .idea/
 
 # runs
-# Ignore everything in runs by default
 data/runs/*
-
-# Keep the global summary
 !data/runs/runs_summary.jsonl
 
-# Allow folders to be traversed
+# allow run directories themselves
 !data/runs/*/
 
-# Keep only what we care about inside each run
+# ignore everything inside each run directory
+data/runs/*/*
+
+# then re-allow only the two files we want
 !data/runs/*/run_summary.json
 !data/runs/*/special_token_embeddings.pt
