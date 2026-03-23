@@ -30,3 +30,17 @@ notebooks/**/.ipynb_checkpoints/
 # editor
 .vscode/
 .idea/
+
+# runs
+# Ignore everything in runs by default
+data/runs/*
+
+# Keep the global summary
+!data/runs/runs_summary.jsonl
+
+# Allow folders to be traversed
+!data/runs/*/
+
+# Keep only what we care about inside each run
+!data/runs/*/run_summary.json
+!data/runs/*/special_token_embeddings.pt

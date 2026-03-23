@@ -123,19 +123,27 @@ def build_eval_dir(config: EvalConfig) -> Path:
     return Path(config.repo_root) / config.evals_root / config.run_name
 
 
-def load_training_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def load_training_artifacts(
+    run_dir: Path,
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     run_summary_path = run_dir / "run_summary.json"
     embedding_path = run_dir / "special_token_embeddings.pt"
 
     if not run_summary_path.exists():
         raise FileNotFoundError(f"Missing run summary: {run_summary_path}")
 
+    run_summary = load_json(run_summary_path)
+    train_config = run_summary["config"]
+
+    num_special_tokens = int(train_config.get("num_special_tokens", 0))
+
+    if num_special_tokens == 0:
+        return run_summary, None
+
     if not embedding_path.exists():
         raise FileNotFoundError(f"Missing learned embedding file: {embedding_path}")
 
-    run_summary = load_json(run_summary_path)
     embedding_artifact = torch.load(embedding_path, map_location="cpu")
-
     return run_summary, embedding_artifact
 
 
@@ -542,8 +550,11 @@ def prepare_model_and_tokenizer_from_train_config(
 
 
 def load_learned_special_token_embeddings(
-    embedding_artifact: Dict[str, Any],
-) -> torch.Tensor:
+    embedding_artifact: Optional[Dict[str, Any]],
+) -> Optional[torch.Tensor]:
+    if embedding_artifact is None:
+        return None
+
     if "embeddings" not in embedding_artifact:
         raise ValueError("Embedding artifact does not contain 'embeddings'.")
 
@@ -558,10 +569,15 @@ def load_learned_special_token_embeddings(
 def inject_special_token_embeddings(
     model,
     special_token_ids: List[int],
-    learned_rows: torch.Tensor,
+    learned_rows: Optional[torch.Tensor],
 ) -> None:
     if len(special_token_ids) == 0:
         return
+
+    if learned_rows is None:
+        raise ValueError(
+            "Expected learned_rows for non-baseline evaluation, but got None."
+        )
 
     if learned_rows.shape[0] != len(special_token_ids):
         raise ValueError(
@@ -573,7 +589,12 @@ def inject_special_token_embeddings(
 
     with torch.no_grad():
         for i, token_id in enumerate(special_token_ids):
-            embedding_weight[token_id].copy_(learned_rows[i].to(embedding_weight.device, dtype=embedding_weight.dtype))
+            embedding_weight[token_id].copy_(
+                learned_rows[i].to(
+                    embedding_weight.device,
+                    dtype=embedding_weight.dtype,
+                )
+            )
 
 
 def build_position_ids_with_shared_special_tokens(
@@ -1047,12 +1068,16 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
         eval_config=config,
     )
 
-    learned_rows = load_learned_special_token_embeddings(embedding_artifact=embedding_artifact)
-    inject_special_token_embeddings(
-        model=model,
-        special_token_ids=special_token_ids,
-        learned_rows=learned_rows,
+    learned_rows = load_learned_special_token_embeddings(
+        embedding_artifact=embedding_artifact
     )
+
+    if int(train_config["num_special_tokens"]) > 0:
+        inject_special_token_embeddings(
+            model=model,
+            special_token_ids=special_token_ids,
+            learned_rows=learned_rows,
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -1121,6 +1146,7 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
         "held_out_topic_id": held_out_topic_id,
         "trained_base_persona_id": target_base_persona_id,
         "trained_style_id": target_style_id,
+        "is_baseline": int(train_config["num_special_tokens"]) == 0,
         "bucket_summaries": {
             bucket_name: {
                 "bucket_name": bucket_result["bucket_name"],
