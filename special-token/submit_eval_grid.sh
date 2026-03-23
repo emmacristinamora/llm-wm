@@ -66,23 +66,21 @@ fi
 
 echo "[info] launching eval grid..."
 
-python -u run_eval_grid.py \
+python run_eval_grid.py \
   --repo_root . \
   --examples_path data/examples.jsonl \
   --runs_root data/runs \
   --evals_root data/evals \
   --personas Emma,Maria \
-  --styles WhatIf \
-  --allowed_personas Emma,Maria \
-  --allowed_styles PickOne,WhatIf \
+  --styles PickOne,WhatIf \
   --topics career_learning,productivity_habits,ethics_decision_making \
-  --token_counts 0 15 \
+  --token_counts 1 3 5 10 15 \
   --token_placements after_context \
-  --position_modes default shared_position \
+  --position_modes shared_position \
   --include_baseline \
   --include_trained \
-  --generation_max_new_tokens 128 \
-  --save_per_example \
-  --seed 42
+  --allowed_personas Emma,Maria \
+  --allowed_styles PickOne,WhatIf \
+  --save_per_example
 
 echo "[info] end=$(date)"
