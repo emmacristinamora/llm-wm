@@ -26,6 +26,10 @@ class EvalConfig:
     evals_root: str = "data/evals"
     run_name: str = ""
 
+    # optional restriction of control universe
+    allowed_personas: Optional[List[str]] = None
+    allowed_styles: Optional[List[str]] = None
+
     # evaluation-time generation config
     generation_max_new_tokens: int = 128
     do_sample: bool = False
@@ -356,6 +360,8 @@ def build_evaluation_buckets(
     target_base_persona_id: str,
     target_style_id: str,
     held_out_topic_id: str,
+    allowed_personas: Optional[List[str]] = None,
+    allowed_styles: Optional[List[str]] = None,
     max_examples_per_bucket: Optional[int] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -378,6 +384,19 @@ def build_evaluation_buckets(
         topic_id=held_out_topic_id,
     )
 
+    if allowed_personas is not None:
+        allowed_persona_set = {str(x) for x in allowed_personas}
+        topic_examples = [
+            ex for ex in topic_examples
+            if str(ex["base_persona_id"]) in allowed_persona_set
+        ]
+
+    if allowed_styles is not None:
+        allowed_style_set = {str(x) for x in allowed_styles}
+        topic_examples = [
+            ex for ex in topic_examples
+            if str(ex["style_id"]) in allowed_style_set
+        ]
     matched: List[Dict[str, Any]] = []
     same_persona_diff_style: List[Dict[str, Any]] = []
     diff_persona_same_style: List[Dict[str, Any]] = []
@@ -664,6 +683,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs_root", type=str, default="data/runs")
     parser.add_argument("--evals_root", type=str, default="data/evals")
     parser.add_argument("--run_name", type=str, required=True)
+    parser.add_argument("--allowed_personas", type=str, default="")
+    parser.add_argument("--allowed_styles", type=str, default="")
 
     parser.add_argument("--generation_max_new_tokens", type=int, default=128)
     parser.add_argument("--do_sample", action="store_true")
@@ -1090,6 +1111,8 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
         target_base_persona_id=target_base_persona_id,
         target_style_id=target_style_id,
         held_out_topic_id=held_out_topic_id,
+        allowed_personas=config.allowed_personas,
+        allowed_styles=config.allowed_styles,
         max_examples_per_bucket=config.max_examples_per_bucket,
     )
 
@@ -1179,6 +1202,15 @@ def main() -> None:
 
     if args.use_fp16 and args.use_bf16:
         raise ValueError("Use at most one of --use_fp16 and --use_bf16.")
+    
+    allowed_personas = (
+        [x.strip() for x in args.allowed_personas.split(",") if x.strip()]
+        if args.allowed_personas else None
+    )
+    allowed_styles = (
+        [x.strip() for x in args.allowed_styles.split(",") if x.strip()]
+        if args.allowed_styles else None
+    )
 
     config = EvalConfig(
         repo_root=args.repo_root,
@@ -1186,6 +1218,8 @@ def main() -> None:
         runs_root=args.runs_root,
         evals_root=args.evals_root,
         run_name=args.run_name,
+        allowed_personas=allowed_personas,
+        allowed_styles=allowed_styles,
         generation_max_new_tokens=args.generation_max_new_tokens,
         do_sample=args.do_sample,
         temperature=args.temperature,
