@@ -98,8 +98,8 @@ def append_jsonl(row: Dict[str, Any], path: Path) -> None:
 
 
 def build_run_name(config: TrainConfig) -> str:
-    import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # import datetime
+    # timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     return (
         f"{config.base_persona_id}"
         f"__{config.style_id}"
@@ -107,7 +107,8 @@ def build_run_name(config: TrainConfig) -> str:
         f"__tok{config.num_special_tokens}"
         f"__{config.token_placement}"
         f"__{config.position_mode}"
-        f"__{timestamp}"
+        f"_{'template' if config.default_chat_template else 'notemplate'}"
+    #    f"__{timestamp}"
     )
 
 
