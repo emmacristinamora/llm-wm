@@ -39,9 +39,10 @@ class TrainConfig:
     special_token_base: str = "<st>"
     token_placement: str = "after_context"      # before_context | after_context
     position_mode: str = "default"              # default | shared_position
+    default_chat_template: bool = True
 
     # model / optimization
-    model_name: str = "Qwen/Qwen2.5-0.5B"
+    model_name: str = "Qwen/Qwen3-4B-Instruct-2507"
     max_length: int = 1024
     batch_size: int = 1
     num_epochs: int = 3
@@ -199,28 +200,28 @@ def build_leave_one_topic_out_split(
 
 # === PROMPT / FORMATTING HELPERS ===
 
-def format_message(role: str, content: str) -> str:
+def format_message(role: str, content: str, default_chat_template: bool) -> str:
     role = role.lower().strip()
 
     if role == "system":
-        prefix = "System"
+        prefix = "<im_start>system\n" if default_chat_template else "System"
     elif role == "user":
-        prefix = "User"
+        prefix = "<|im_start|>user\n" if default_chat_template else "User"
     elif role == "assistant":
-        prefix = "Assistant"
+        prefix = "<|im_start|>assistant\n" if default_chat_template else "Assistant"
     else:
         prefix = role.capitalize()
 
-    return f"{prefix}: {content.strip()}"
+    return f"{prefix}<|im_end|>" if default_chat_template else f"{prefix}: {content.strip()}"
 
 
-def render_context_messages(messages: List[Dict[str, str]]) -> str:
+def render_context_messages(messages: List[Dict[str, str]], default_chat_template: bool) -> str:
     rendered = []
 
     for message in messages:
         role = message["role"]
         content = message["content"]
-        rendered.append(format_message(role=role, content=content))
+        rendered.append(format_message(role=role, content=content, default_chat_template=default_chat_template))
 
     return "\n".join(rendered).strip()
 
@@ -239,21 +240,22 @@ def build_prompt_text(
     example: Dict[str, Any],
     special_tokens: List[str],
     token_placement: str,
+    default_chat_template: bool
 ) -> str:
-    context_text = render_context_messages(example["context_messages"])
-    special_text = " ".join(special_tokens).strip()
+    context_text = render_context_messages(example["context_messages"], default_chat_template=default_chat_template)
+    special_text = "".join(special_tokens)
 
     if len(special_tokens) == 0:
-        conditioned_context = context_text
+        conditioned_context = f"{context_text}\n"
     else:
         if token_placement == "before_context":
-            conditioned_context = f"{special_text}\n{context_text}".strip()
+            conditioned_context = f"{special_text}\n{context_text}\n".strip()
         elif token_placement == "after_context":
-            conditioned_context = f"{context_text}\n{special_text}".strip()
+            conditioned_context = f"{context_text}\n{special_text}\n".strip()
         else:
             raise ValueError(f"Unsupported token_placement: {token_placement}")
 
-    prompt_text = f"{conditioned_context}\nUser:"
+    prompt_text = f"{conditioned_context}<|im_start|>user\n" if default_chat_template else f"{conditioned_context}User:"
     return prompt_text
 
 
@@ -261,15 +263,19 @@ def build_full_text(
     example: Dict[str, Any],
     special_tokens: List[str],
     token_placement: str,
+    default_chat_template: bool
 ) -> str:
     prompt_text = build_prompt_text(
         example=example,
         special_tokens=special_tokens,
         token_placement=token_placement,
+        default_chat_template=default_chat_template
     )
 
     target_text = example["target_message"].strip()
-    full_text = f"{prompt_text} {target_text}"
+    # full_text = f"{prompt_text}{target_text}<|im_end|>\n" if default_chat_template else f"{prompt_text}{target_text}"
+    # I am leaving <|im_end|>\n out, since we are only interested in scoring the actual reply.
+    full_text = f"{prompt_text}{target_text}"
     return full_text
 
 
@@ -281,6 +287,7 @@ def build_training_example_tensors(
     special_tokens: List[str],
     token_placement: str,
     max_length: int,
+    default_chat_template: bool
 ) -> Optional[Dict[str, Any]]:
     """
     Build one supervised example while preserving the target under truncation.
@@ -295,8 +302,10 @@ def build_training_example_tensors(
         example=example,
         special_tokens=special_tokens,
         token_placement=token_placement,
+        default_chat_template=default_chat_template
     )
-    target_text = " " + example["target_message"].strip()
+
+    target_text =  example["target_message"].strip()
 
     prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
     target_ids = tokenizer.encode(target_text, add_special_tokens=False)
@@ -355,6 +364,8 @@ class NextUserTurnDataset(Dataset):
         special_tokens: List[str],
         token_placement: str,
         max_length: int,
+        default_chat_template: bool
+        
     ):
         self.tokenizer = tokenizer
         self.special_tokens = special_tokens
@@ -371,6 +382,7 @@ class NextUserTurnDataset(Dataset):
                 special_tokens=special_tokens,
                 token_placement=token_placement,
                 max_length=max_length,
+                default_chat_template=default_chat_template
             )
             if item is None:
                 dropped_examples += 1
@@ -887,6 +899,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         special_tokens=special_tokens,
         token_placement=config.token_placement,
         max_length=config.max_length,
+        default_chat_template=config.default_chat_template,
     )
     val_dataset = NextUserTurnDataset(
         examples=val_examples,
@@ -894,6 +907,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         special_tokens=special_tokens,
         token_placement=config.token_placement,
         max_length=config.max_length,
+        default_chat_template=config.default_chat_template,
     )
 
     if len(train_dataset) == 0:
