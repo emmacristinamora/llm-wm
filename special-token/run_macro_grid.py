@@ -233,6 +233,7 @@ def main() -> None:
                     "num_special_tokens": 0,
                     "token_placement": args.baseline_token_placement,
                     "position_mode": args.baseline_position_mode,
+                    "use_examples_percentage": 1.0,
                     "is_baseline": True,
                 }
             )
