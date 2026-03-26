@@ -42,6 +42,8 @@ def build_python_command(
     num_special_tokens: int,
     token_placement: str,
     position_mode: str,
+    default_chat_template: bool,
+    use_examples_percentage: float,
     model_name: str,
     max_length: int,
     batch_size: int,
@@ -68,6 +70,8 @@ def build_python_command(
         "--num_special_tokens", str(num_special_tokens),
         "--token_placement", token_placement,
         "--position_mode", position_mode,
+        "--default_chat_template" if default_chat_template else "",
+        "--use_examples_percentage", str(use_examples_percentage),
         "--model_name", model_name,
         "--max_length", str(max_length),
         "--batch_size", str(batch_size),
@@ -144,9 +148,20 @@ def parse_args() -> argparse.Namespace:
         default=["default", "shared_position"],
         choices=["default", "shared_position"],
     )
-
+    parser.add_argument(
+        "--default_chat_template",
+        action="store_true",
+        help="Whether to use the default chat template (with system/assistant/user roles) or a simplified template."
+    )
+    parser.add_argument(
+        "--use_examples_percentage",
+        type=float,
+        nargs="+",
+        default=[1.0],
+        help="Percentage of available examples to use for training."
+    )
     # shared training args
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=3)
@@ -197,13 +212,15 @@ def main() -> None:
             raise ValueError("token_counts should contain only positive values. Baseline is handled separately.")
         for token_placement in args.token_placements:
             for position_mode in args.position_modes:
-                nonbaseline_micro_configs.append(
-                    {
-                        "num_special_tokens": num_special_tokens,
-                        "token_placement": token_placement,
-                        "position_mode": position_mode,
-                    }
-                )
+                for example_percentage in args.use_examples_percentage:
+                    nonbaseline_micro_configs.append(
+                        {
+                            "num_special_tokens": num_special_tokens,
+                            "token_placement": token_placement,
+                            "position_mode": position_mode,
+                            "use_examples_percentage": example_percentage,
+                        }
+                    )
 
     planned_runs = []
     for base_persona_id, style_id, held_out_topic_id in macro_buckets:
@@ -229,6 +246,7 @@ def main() -> None:
                     "num_special_tokens": micro["num_special_tokens"],
                     "token_placement": micro["token_placement"],
                     "position_mode": micro["position_mode"],
+                    "use_examples_percentage": micro["use_examples_percentage"],
                     "is_baseline": False,
                 }
             )
@@ -247,6 +265,8 @@ def main() -> None:
         "token_counts": args.token_counts,
         "token_placements": args.token_placements,
         "position_modes": args.position_modes,
+        "default_chat_template": args.default_chat_template,
+        "use_examples_percentage": args.use_examples_percentage,
         "model_name": args.model_name,
         "max_length": args.max_length,
         "batch_size": args.batch_size,
@@ -304,6 +324,8 @@ def main() -> None:
             num_special_tokens=run_cfg["num_special_tokens"],
             token_placement=run_cfg["token_placement"],
             position_mode=run_cfg["position_mode"],
+            default_chat_template=args.default_chat_template,
+            use_examples_percentage=run_cfg["use_examples_percentage"],
             model_name=args.model_name,
             max_length=args.max_length,
             batch_size=args.batch_size,

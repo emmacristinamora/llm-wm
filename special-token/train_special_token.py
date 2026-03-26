@@ -40,6 +40,7 @@ class TrainConfig:
     token_placement: str = "after_context"      # before_context | after_context
     position_mode: str = "default"              # default | shared_position
     default_chat_template: bool = True
+    use_examples_percentage: float = 1.0
 
     # model / optimization
     model_name: str = "Qwen/Qwen3-4B-Instruct-2507"
@@ -365,7 +366,8 @@ class NextUserTurnDataset(Dataset):
         special_tokens: List[str],
         token_placement: str,
         max_length: int,
-        default_chat_template: bool
+        default_chat_template: bool,
+        use_examples_percentage: float = 1.0,
         
     ):
         self.tokenizer = tokenizer
@@ -375,6 +377,9 @@ class NextUserTurnDataset(Dataset):
 
         processed_items: List[Dict[str, Any]] = []
         dropped_examples = 0
+
+        if use_examples_percentage < 1.0:
+            examples = random.sample(examples, int(len(examples) * use_examples_percentage))
 
         for example in examples:
             item = build_training_example_tensors(
@@ -1092,7 +1097,9 @@ def parse_args() -> argparse.Namespace:
         default="default",
     )
 
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-0.5B")
+    parser.add_argument("--default_chat_template", action="store_true")
+    parser.add_argument("--use_examples_percentage", type=float, default=1.0)
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=3)
@@ -1127,6 +1134,8 @@ def main() -> None:
         special_token_base=args.special_token_base,
         token_placement=args.token_placement,
         position_mode=args.position_mode,
+        default_chat_template=args.default_chat_template,
+        use_examples_percentage=args.use_examples_percentage,
         model_name=args.model_name,
         max_length=args.max_length,
         batch_size=args.batch_size,
@@ -1161,6 +1170,9 @@ def main() -> None:
         "num_special_tokens": config.num_special_tokens,
         "token_placement": config.token_placement,
         "position_mode": config.position_mode,
+        "default_chat_template": config.default_chat_template,
+        "use_examples_percentage": config.use_examples_percentage,
+        "model_name": config.model_name,
         "learning_rate": config.learning_rate,
         "weight_decay": config.weight_decay,
         "batch_size": config.batch_size,
