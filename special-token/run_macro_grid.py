@@ -70,7 +70,6 @@ def build_python_command(
         "--num_special_tokens", str(num_special_tokens),
         "--token_placement", token_placement,
         "--position_mode", position_mode,
-        "--default_chat_template" if default_chat_template else "",
         "--use_examples_percentage", str(use_examples_percentage),
         "--model_name", model_name,
         "--max_length", str(max_length),
@@ -84,6 +83,9 @@ def build_python_command(
         "--eval_every_steps", str(eval_every_steps),
         "--seed", str(seed),
     ]
+
+    if default_chat_template:
+        cmd.append("--default_chat_template")
 
     if use_fp16:
         cmd.append("--use_fp16")
