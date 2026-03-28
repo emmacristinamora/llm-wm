@@ -215,14 +215,16 @@ def main() -> None:
         for token_placement in args.token_placements:
             for position_mode in args.position_modes:
                 for example_percentage in args.use_examples_percentage:
-                    nonbaseline_micro_configs.append(
-                        {
-                            "num_special_tokens": num_special_tokens,
-                            "token_placement": token_placement,
-                            "position_mode": position_mode,
-                            "use_examples_percentage": example_percentage,
-                        }
-                    )
+                    for num_epochs in args.num_epochs:
+                        nonbaseline_micro_configs.append(
+                            {
+                                "num_special_tokens": num_special_tokens,
+                                "token_placement": token_placement,
+                                "position_mode": position_mode,
+                                "use_examples_percentage": example_percentage,
+                                "num_epochs": num_epochs,
+                            }
+                        )
 
     planned_runs = []
     for base_persona_id, style_id, held_out_topic_id in macro_buckets:
