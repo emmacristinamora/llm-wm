@@ -109,6 +109,7 @@ def build_run_name(config: TrainConfig) -> str:
         f"__{config.token_placement}"
         f"__{config.position_mode}"
         f"_{'template' if config.default_chat_template else 'notemplate'}"
+        f"__useexamples{int(config.use_examples_percentage * 100)}"
     #    f"__{timestamp}"
     )
 
@@ -367,7 +368,7 @@ class NextUserTurnDataset(Dataset):
         token_placement: str,
         max_length: int,
         default_chat_template: bool,
-        use_examples_percentage: float = 1.0,
+        use_examples_percentage: float,
         
     ):
         self.tokenizer = tokenizer
@@ -906,6 +907,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         token_placement=config.token_placement,
         max_length=config.max_length,
         default_chat_template=config.default_chat_template,
+        use_examples_percentage=config.use_examples_percentage,
     )
     val_dataset = NextUserTurnDataset(
         examples=val_examples,
@@ -914,6 +916,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         token_placement=config.token_placement,
         max_length=config.max_length,
         default_chat_template=config.default_chat_template,
+        use_examples_percentage=config.use_examples_percentage,
     )
 
     if len(train_dataset) == 0:
