@@ -629,6 +629,7 @@ def save_special_token_artifacts(
         "best_val_loss": best_val_loss,
         "final_val_loss": final_val_loss,
         "train_history": train_history,
+        "val_losses": val_losses,
     }
 
     if extra_metadata is not None:
@@ -863,7 +864,7 @@ def train_one_epoch(
                     model.get_input_embeddings().weight.detach().cpu().clone()
                 )
 
-    return global_step, best_val_loss, best_embedding_state
+    return global_step, best_val_loss, best_embedding_state, val_loss
 
 
 def run_training(config: TrainConfig) -> Dict[str, Any]:
@@ -990,6 +991,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
             "special_tokens": special_tokens,
             "special_token_ids": special_token_ids,
             "is_baseline": True,
+            "val_losses": [],
         }
 
     optimizer = build_optimizer(model=model, config=config)
@@ -1003,9 +1005,10 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
     best_val_loss = float("inf")
     best_embedding_state = None
     global_step = 0
+    val_losses: List[float] = []
 
     for _epoch in range(config.num_epochs):
-        global_step, best_val_loss, best_embedding_state = train_one_epoch(
+        global_step, best_val_loss, best_embedding_state, val_loss = train_one_epoch(
             model=model,
             train_loader=train_loader,
             optimizer=optimizer,
@@ -1019,6 +1022,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
             best_val_loss=best_val_loss,
             best_embedding_state=best_embedding_state,
         )
+        val_losses.append(val_loss)
 
     if best_embedding_state is not None:
         model.get_input_embeddings().weight.data.copy_(best_embedding_state.to(device))
@@ -1050,6 +1054,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
             "baseline_val_loss": baseline_val_loss,
             "total_train_steps": total_train_steps,
             "is_baseline": False,
+            "val_losses": val_losses,
         },
     )
 
@@ -1070,6 +1075,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         "special_tokens": special_tokens,
         "special_token_ids": special_token_ids,
         "is_baseline": False,
+        "val_losses": val_losses,
     }
 
 
@@ -1187,6 +1193,7 @@ def main() -> None:
         "best_val_loss": results["best_val_loss"],
         "final_val_loss": results["final_val_loss"],
         "is_baseline": results["is_baseline"],
+        "val_losses": results["val_losses"],
     }
     append_jsonl(summary_row, Path(config.repo_root) / config.runs_root / "runs_summary.jsonl")
 
