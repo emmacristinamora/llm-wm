@@ -106,9 +106,10 @@ def build_run_name(config: TrainConfig) -> str:
         f"__{config.style_id}"
         f"__heldout_{config.held_out_topic_id}"
         f"__tok{config.num_special_tokens}"
+        f"__{config.num_epochs}ep"
         f"__{config.token_placement}"
         f"__{config.position_mode}"
-        f"_{'template' if config.default_chat_template else 'notemplate'}"
+        f"__{'template' if config.default_chat_template else 'notemplate'}"
         f"__useexamples{int(config.use_examples_percentage * 100)}"
     #    f"__{timestamp}"
     )
@@ -916,7 +917,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         token_placement=config.token_placement,
         max_length=config.max_length,
         default_chat_template=config.default_chat_template,
-        use_examples_percentage=config.use_examples_percentage,
+        use_examples_percentage=1.0,
     )
 
     if len(train_dataset) == 0:

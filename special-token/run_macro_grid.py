@@ -136,6 +136,7 @@ def parse_args() -> argparse.Namespace:
 
     # micro grid for non-baseline runs
     parser.add_argument("--token_counts", type=int, nargs="+", default=[1, 3, 5, 10, 15])
+    parser.add_argument("--num_epochs", type=int, nargs="+", default=[3])
     parser.add_argument(
         "--token_placements",
         type=str,
@@ -166,7 +167,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=5e-4)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--warmup_ratio", type=float, default=0.05)
@@ -237,6 +237,7 @@ def main() -> None:
                     "position_mode": args.baseline_position_mode,
                     "use_examples_percentage": 1.0,
                     "is_baseline": True,
+                    "num_epochs": 0,
                 }
             )
 
@@ -247,6 +248,7 @@ def main() -> None:
                     "style_id": style_id,
                     "held_out_topic_id": held_out_topic_id,
                     "num_special_tokens": micro["num_special_tokens"],
+                    "num_epochs": micro["num_epochs"],
                     "token_placement": micro["token_placement"],
                     "position_mode": micro["position_mode"],
                     "use_examples_percentage": micro["use_examples_percentage"],
@@ -332,7 +334,7 @@ def main() -> None:
             model_name=args.model_name,
             max_length=args.max_length,
             batch_size=args.batch_size,
-            num_epochs=args.num_epochs,
+            num_epochs=run_cfg["num_epochs"],
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             warmup_ratio=args.warmup_ratio,
