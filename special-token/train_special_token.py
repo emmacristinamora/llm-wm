@@ -208,7 +208,7 @@ def format_message(role: str, content: str, default_chat_template: bool) -> str:
     role = role.lower().strip()
 
     if role == "system":
-        prefix = "<im_start>system\n" if default_chat_template else "System"
+        prefix = "<|im_start|>system\n" if default_chat_template else "System"
     elif role == "user":
         prefix = "<|im_start|>user\n" if default_chat_template else "User"
     elif role == "assistant":
@@ -216,7 +216,7 @@ def format_message(role: str, content: str, default_chat_template: bool) -> str:
     else:
         prefix = role.capitalize()
 
-    return f"{prefix}<|im_end|>" if default_chat_template else f"{prefix}: {content.strip()}"
+    return f"{prefix}{content}<|im_end|>" if default_chat_template else f"{prefix}: {content.strip()}"
 
 
 def render_context_messages(messages: List[Dict[str, str]], default_chat_template: bool) -> str:
