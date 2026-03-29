@@ -618,6 +618,7 @@ def save_special_token_artifacts(
     train_history: List[Dict[str, Any]],
     best_val_loss: float,
     final_val_loss: float,
+    val_losses: List[float],
     extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -964,6 +965,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
             train_history=train_history,
             best_val_loss=baseline_val_loss,
             final_val_loss=baseline_val_loss,
+            val_losses=[],
             extra_metadata={
                 "split_info": split_info,
                 "n_train_examples": len(train_dataset),
@@ -1044,6 +1046,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         tokenizer=tokenizer,
         train_history=train_history,
         best_val_loss=best_val_loss,
+        val_losses=val_losses,
         final_val_loss=final_val_loss,
         extra_metadata={
             "split_info": split_info,
@@ -1054,7 +1057,6 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
             "baseline_val_loss": baseline_val_loss,
             "total_train_steps": total_train_steps,
             "is_baseline": False,
-            "val_losses": val_losses,
         },
     )
 
