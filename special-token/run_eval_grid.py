@@ -16,10 +16,12 @@ def load_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
-def append_jsonl(row: Dict[str, Any], path: Path) -> None:
+def save_jsonl(rows: List[Dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 # === PARSING HELPERS ===
@@ -113,23 +115,51 @@ def flatten_eval_summary(eval_summary: Dict[str, Any]) -> Dict[str, Any]:
         "num_special_tokens": train_config["num_special_tokens"],
         "token_placement": train_config["token_placement"],
         "position_mode": train_config["position_mode"],
+        "default_chat_template": train_config.get("default_chat_template", False),
+        "use_examples_percentage": train_config.get("use_examples_percentage"),
         "model_name": train_config["model_name"],
         "is_baseline": int(train_config["num_special_tokens"]) == 0,
     }
 
     for bucket_name, bucket in bucket_summaries.items():
         prefix = bucket_name
+
         row[f"{prefix}__n_examples_raw"] = bucket["n_examples_raw"]
         row[f"{prefix}__n_examples_used"] = bucket["n_examples_used"]
         row[f"{prefix}__n_examples_dropped"] = bucket["n_examples_dropped"]
-        row[f"{prefix}__mean_teacher_forced_loss"] = bucket["mean_teacher_forced_loss"]
+
+        row[f"{prefix}__mean_teacher_forced_loss_train_aligned"] = bucket["mean_teacher_forced_loss_train_aligned"]
+        row[f"{prefix}__mean_teacher_forced_loss_user_conditioned"] = bucket["mean_teacher_forced_loss_user_conditioned"]
+        row[f"{prefix}__mean_teacher_forced_loss_assistant_conditioned"] = bucket["mean_teacher_forced_loss_assistant_conditioned"]
+
         row[f"{prefix}__mean_generation_cosine_similarity"] = bucket["mean_generation_cosine_similarity"]
         row[f"{prefix}__exact_match_rate"] = bucket["exact_match_rate"]
+        row[f"{prefix}__mean_repetition_score"] = bucket["mean_repetition_score"]
+
+        row[f"{prefix}__mean_generated_text_loss_user_conditioned"] = bucket["mean_generated_text_loss_user_conditioned"]
+        row[f"{prefix}__mean_generated_text_loss_assistant_conditioned"] = bucket["mean_generated_text_loss_assistant_conditioned"]
 
     for k, v in deltas.items():
         row[k] = v
 
     return row
+
+
+def rebuild_eval_runs_summary(evals_root: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+
+    eval_dirs = [
+        p for p in evals_root.iterdir()
+        if p.is_dir() and (p / "eval_summary.json").exists()
+    ]
+    eval_dirs = sorted(eval_dirs)
+
+    for eval_dir in eval_dirs:
+        eval_summary = load_eval_summary(eval_dir)
+        flat_row = flatten_eval_summary(eval_summary)
+        rows.append(flat_row)
+
+    return rows
 
 
 # === CLI ===
@@ -139,6 +169,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--repo_root", type=str, default=".")
     parser.add_argument("--examples_path", type=str, default="data/examples.jsonl")
+    parser.add_argument("--transcripts_path", type=str, default="data/transcripts.jsonl")
     parser.add_argument("--runs_root", type=str, default="data/runs")
     parser.add_argument("--evals_root", type=str, default="data/evals")
 
@@ -146,7 +177,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--styles", type=str, default="")
     parser.add_argument("--topics", type=str, default="")
 
-    # New: explicitly separate run selection filters from evaluator control filters.
     parser.add_argument("--allowed_personas", type=str, default="")
     parser.add_argument("--allowed_styles", type=str, default="")
 
@@ -168,7 +198,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_examples_per_bucket", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
 
-    # New: optional instead of always being forced on.
+    parser.add_argument("--use_fp16", action="store_true")
+    parser.add_argument("--use_bf16", action="store_true")
     parser.add_argument("--save_per_example", action="store_true")
 
     return parser.parse_args()
@@ -178,6 +209,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    if args.use_fp16 and args.use_bf16:
+        raise ValueError("Use at most one of --use_fp16 and --use_bf16.")
 
     personas = parse_csv_arg(args.personas)
     styles = parse_csv_arg(args.styles)
@@ -232,10 +266,9 @@ def main() -> None:
     print(f"[info] token_counts={token_counts}")
     print(f"[info] token_placements={token_placements}")
     print(f"[info] position_modes={position_modes}")
+    print(f"[info] max_examples_per_bucket={args.max_examples_per_bucket}")
     print(f"[info] save_per_example={args.save_per_example}")
     print("=" * 80)
-
-    summary_path = evals_root / "eval_runs_summary.jsonl"
 
     for idx, run_dir in enumerate(selected_run_dirs, start=1):
         run_name = run_dir.name
@@ -252,19 +285,23 @@ def main() -> None:
             "evaluate_special_token.py",
             "--repo_root", str(args.repo_root),
             "--examples_path", str(args.examples_path),
+            "--transcripts_path", str(args.transcripts_path),
             "--runs_root", str(args.runs_root),
             "--evals_root", str(args.evals_root),
             "--run_name", run_name,
             "--generation_max_new_tokens", str(args.generation_max_new_tokens),
             "--sentence_model_name", str(args.sentence_model_name),
+            "--max_length", "1024",
             "--seed", str(args.seed),
         ]
 
+        if args.use_fp16:
+            cmd.append("--use_fp16")
+        if args.use_bf16:
+            cmd.append("--use_bf16")
         if args.save_per_example:
             cmd.append("--save_per_example")
 
-        # Prefer explicit allowed_* filters when provided.
-        # Otherwise fall back to the selected personas/styles.
         if allowed_personas is not None:
             cmd.extend(["--allowed_personas", ",".join(allowed_personas)])
         elif personas is not None:
@@ -283,13 +320,14 @@ def main() -> None:
 
         subprocess.run(cmd, check=True, cwd=repo_root)
 
-        eval_summary = load_eval_summary(eval_dir)
-        flat_row = flatten_eval_summary(eval_summary)
-        append_jsonl(flat_row, summary_path)
+    summary_rows = rebuild_eval_runs_summary(evals_root)
+    summary_path = evals_root / "eval_runs_summary.jsonl"
+    save_jsonl(summary_rows, summary_path)
 
     print("=" * 80)
     print("=== EVAL GRID COMPLETED ===")
     print(f"[info] summary_path={summary_path}")
+    print(f"[info] n_summary_rows={len(summary_rows)}")
     print("=" * 80)
 
 

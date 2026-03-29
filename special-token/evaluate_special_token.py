@@ -4,14 +4,14 @@
 
 import argparse
 import json
-import random
 import math
+import random
+import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
@@ -22,6 +22,7 @@ class EvalConfig:
     # paths
     repo_root: str = "."
     examples_path: str = "data/examples.jsonl"
+    transcripts_path: str = "data/transcripts.jsonl"
     runs_root: str = "data/runs"
     evals_root: str = "data/evals"
     run_name: str = ""
@@ -30,7 +31,7 @@ class EvalConfig:
     allowed_personas: Optional[List[str]] = None
     allowed_styles: Optional[List[str]] = None
 
-    # evaluation-time generation config
+    # generation config
     generation_max_new_tokens: int = 128
     do_sample: bool = False
     temperature: float = 1.0
@@ -39,9 +40,8 @@ class EvalConfig:
     # sentence similarity model
     sentence_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # compute / batching
+    # compute
     max_length: int = 1024
-    batch_size: int = 1
     max_examples_per_bucket: Optional[int] = None
 
     # reproducibility / precision
@@ -50,7 +50,7 @@ class EvalConfig:
     use_bf16: bool = False
 
     # saving
-    save_per_example: bool = True
+    save_per_example: bool = False
 
 
 # === REPRODUCIBILITY HELPERS ===
@@ -82,22 +82,6 @@ def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def save_json(obj: Dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    sanitized_obj = sanitize_for_json(obj)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(sanitized_obj, f, indent=2, ensure_ascii=False)
-
-
-def append_jsonl(row: Dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-
 def sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
@@ -111,6 +95,20 @@ def sanitize_for_json(obj: Any) -> Any:
         return [sanitize_for_json(v) for v in obj]
 
     return obj
+
+
+def save_json(obj: Dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(sanitize_for_json(obj), f, indent=2, ensure_ascii=False)
+
+
+def append_jsonl(row: Dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(sanitize_for_json(row), ensure_ascii=False) + "\n")
 
 
 def build_run_dir(config: EvalConfig) -> Path:
@@ -138,7 +136,6 @@ def load_training_artifacts(
 
     run_summary = load_json(run_summary_path)
     train_config = run_summary["config"]
-
     num_special_tokens = int(train_config.get("num_special_tokens", 0))
 
     if num_special_tokens == 0:
@@ -151,7 +148,7 @@ def load_training_artifacts(
     return run_summary, embedding_artifact
 
 
-# === EXAMPLE SCHEMA HELPERS ===
+# === EXAMPLE / TRANSCRIPT HELPERS ===
 
 def validate_example_schema(example: Dict[str, Any]) -> None:
     required_keys = [
@@ -169,10 +166,48 @@ def validate_example_schema(example: Dict[str, Any]) -> None:
         raise ValueError(f"Example is missing required keys: {missing}")
 
 
+def build_transcript_lookup(transcripts: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    lookup: Dict[str, Dict[str, Any]] = {}
+
+    for row in transcripts:
+        transcript_id = row.get("transcript_id")
+        if transcript_id is None:
+            continue
+        lookup[str(transcript_id)] = row
+
+    return lookup
+
+
+def get_system_prompts_for_example(
+    example: Dict[str, Any],
+    transcript_lookup: Dict[str, Dict[str, Any]],
+) -> Tuple[str, str]:
+    transcript_id = str(example["transcript_id"])
+
+    if transcript_id not in transcript_lookup:
+        raise KeyError(f"transcript_id={transcript_id} not found in transcripts.jsonl")
+
+    row = transcript_lookup[transcript_id]
+
+    system_llm1 = str(row.get("system_llm1", "")).strip()
+    system_llm2 = str(row.get("system_llm2", "")).strip()
+
+    if not system_llm1:
+        raise ValueError(f"Missing system_llm1 for transcript_id={transcript_id}")
+    if not system_llm2:
+        raise ValueError(f"Missing system_llm2 for transcript_id={transcript_id}")
+
+    return system_llm1, system_llm2
+
+
 # === PROMPT / FORMATTING HELPERS ===
 
-def format_message(role: str, content: str) -> str:
+def format_message(role: str, content: str, default_chat_template: bool) -> str:
     role = role.lower().strip()
+    content = content.strip()
+
+    if default_chat_template:
+        return f"<|im_start|>{role}\n{content}<|im_end|>"
 
     if role == "system":
         prefix = "System"
@@ -183,21 +218,22 @@ def format_message(role: str, content: str) -> str:
     else:
         prefix = role.capitalize()
 
-    return f"{prefix}: {content.strip()}"
+    return f"{prefix}: {content}"
 
 
-def render_context_messages(messages: List[Dict[str, str]]) -> str:
-    """
-    Important:
-    This mirrors training exactly. We render ONLY context_messages.
-    We do NOT insert any separate system prompt here.
-    """
+def render_messages(messages: List[Dict[str, str]], default_chat_template: bool) -> str:
     rendered: List[str] = []
 
     for message in messages:
-        role = message["role"]
-        content = message["content"]
-        rendered.append(format_message(role=role, content=content))
+        role = str(message["role"]).strip()
+        content = str(message["content"]).strip()
+        rendered.append(
+            format_message(
+                role=role,
+                content=content,
+                default_chat_template=default_chat_template,
+            )
+        )
 
     return "\n".join(rendered).strip()
 
@@ -212,122 +248,85 @@ def make_special_tokens(base: str, n: int) -> List[str]:
     return [f"{base}{i}" for i in range(n)]
 
 
-def build_prompt_text(
+def strip_system_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    return [
+        m for m in messages
+        if str(m.get("role", "")).strip().lower() != "system"
+    ]
+
+
+def build_prompt_text_train_aligned(
     example: Dict[str, Any],
     special_tokens: List[str],
     token_placement: str,
+    default_chat_template: bool,
 ) -> str:
     """
-    This must stay aligned with training.
+    Mirrors training.
 
-    Current logic:
-    - render example["context_messages"]
-    - insert learned special token text either before or after context
-    - end with 'User:'
-
-    No explicit system prompt is added here.
+    Important:
+    - uses example["context_messages"] exactly as stored
+    - does not inject transcript system prompts
+    - inserts learned special tokens before/after context
+    - ends with a fresh user header because target_message is the next user turn
     """
-    context_text = render_context_messages(example["context_messages"])
-    special_text = " ".join(special_tokens).strip()
+    context_text = render_messages(
+        example["context_messages"],
+        default_chat_template=default_chat_template,
+    )
+    special_text = "".join(special_tokens)
 
     if len(special_tokens) == 0:
-        conditioned_context = context_text
+        conditioned_context = f"{context_text}\n"
     else:
         if token_placement == "before_context":
-            conditioned_context = f"{special_text}\n{context_text}".strip()
+            conditioned_context = f"{special_text}\n{context_text}\n".strip()
         elif token_placement == "after_context":
-            conditioned_context = f"{context_text}\n{special_text}".strip()
+            conditioned_context = f"{context_text}\n{special_text}\n".strip()
         else:
             raise ValueError(f"Unsupported token_placement: {token_placement}")
 
-    prompt_text = f"{conditioned_context}\nUser:"
-    return prompt_text
+    if default_chat_template:
+        return f"{conditioned_context}<|im_start|>user\n"
+
+    return f"{conditioned_context}User:"
 
 
-def build_full_text(
+def build_prompt_text_conditioned(
     example: Dict[str, Any],
-    special_tokens: List[str],
-    token_placement: str,
+    conditioning_system_prompt: str,
+    default_chat_template: bool,
 ) -> str:
-    prompt_text = build_prompt_text(
-        example=example,
-        special_tokens=special_tokens,
-        token_placement=token_placement,
-    )
-    target_text = example["target_message"].strip()
-    return f"{prompt_text} {target_text}"
-
-
-# === TENSORIZATION HELPERS ===
-
-def build_training_example_tensors(
-    tokenizer,
-    example: Dict[str, Any],
-    special_tokens: List[str],
-    token_placement: str,
-    max_length: int,
-) -> Optional[Dict[str, Any]]:
     """
-    Build one teacher-forced evaluation example.
+    Prompt used for alternative conditioned scoring.
 
-    Same logic as training:
-    - tokenize prompt and target separately
-    - preserve target under truncation
-    - supervise only the target tokens
+    Important:
+    - injects explicit transcript-level system prompt
+    - removes system messages from example context so we do not duplicate them
+    - DOES NOT include learned special tokens
+
+    This is intentional: these metrics are meant to answer
+    "how plausible is this text under the user-conditioned or assistant-conditioned
+    prompting regime?"
+    rather than
+    "how plausible is it under system prompt + learned tokens together?"
     """
-    prompt_text = build_prompt_text(
-        example=example,
-        special_tokens=special_tokens,
-        token_placement=token_placement,
+    non_system_context = strip_system_messages(example["context_messages"])
+
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": conditioning_system_prompt},
+        *non_system_context,
+    ]
+
+    context_text = render_messages(
+        messages,
+        default_chat_template=default_chat_template,
     )
-    target_text = " " + example["target_message"].strip()
 
-    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-    target_ids = tokenizer.encode(target_text, add_special_tokens=False)
+    if default_chat_template:
+        return f"{context_text}\n<|im_start|>user\n"
 
-    if len(target_ids) == 0:
-        return None
-
-    bos_ids: List[int] = []
-    if tokenizer.bos_token_id is not None:
-        bos_ids = [tokenizer.bos_token_id]
-
-    available_for_prompt = max_length - len(bos_ids) - len(target_ids)
-
-    if available_for_prompt < 0:
-        return None
-
-    if len(prompt_ids) > available_for_prompt:
-        prompt_ids = prompt_ids[-available_for_prompt:] if available_for_prompt > 0 else []
-
-    input_ids_list = bos_ids + prompt_ids + target_ids
-    input_ids = torch.tensor(input_ids_list, dtype=torch.long)
-    attention_mask = torch.ones_like(input_ids)
-
-    labels = input_ids.clone()
-    prompt_token_count = len(bos_ids) + len(prompt_ids)
-    labels[:prompt_token_count] = -100
-
-    if (labels != -100).sum().item() == 0:
-        return None
-
-    return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
-        "metadata": {
-            "example_id": example.get("example_id"),
-            "transcript_id": example.get("transcript_id"),
-            "topic_id": example.get("topic_id"),
-            "base_persona_id": example.get("base_persona_id"),
-            "style_id": example.get("style_id"),
-            "user_turn_number": example.get("user_turn_number"),
-            "target_message_index": example.get("target_message_index"),
-            "target_message": example.get("target_message"),
-            "prompt_text": prompt_text,
-        },
-        "raw_example": example,
-    }
+    return f"{context_text}\nUser:"
 
 
 # === SPLIT / BUCKET HELPERS ===
@@ -364,21 +363,6 @@ def build_evaluation_buckets(
     allowed_styles: Optional[List[str]] = None,
     max_examples_per_bucket: Optional[int] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Build the four evaluation conditions for one trained embedding.
-
-    matched:
-        same persona, same style, same held-out topic
-
-    same_persona_diff_style:
-        same persona, different style, same held-out topic
-
-    diff_persona_same_style:
-        different persona, same style, same held-out topic
-
-    diff_persona_diff_style:
-        different persona, different style, same held-out topic
-    """
     topic_examples = filter_examples(
         examples=examples,
         topic_id=held_out_topic_id,
@@ -397,6 +381,7 @@ def build_evaluation_buckets(
             ex for ex in topic_examples
             if str(ex["style_id"]) in allowed_style_set
         ]
+
     matched: List[Dict[str, Any]] = []
     same_persona_diff_style: List[Dict[str, Any]] = []
     diff_persona_same_style: List[Dict[str, Any]] = []
@@ -429,102 +414,6 @@ def build_evaluation_buckets(
         "same_persona_diff_style": same_persona_diff_style,
         "diff_persona_same_style": diff_persona_same_style,
         "diff_persona_diff_style": diff_persona_diff_style,
-    }
-
-
-# === DATASET / COLLATE ===
-
-class NextUserTurnDataset(Dataset):
-    def __init__(
-        self,
-        examples: List[Dict[str, Any]],
-        tokenizer,
-        special_tokens: List[str],
-        token_placement: str,
-        max_length: int,
-    ):
-        self.tokenizer = tokenizer
-        self.special_tokens = special_tokens
-        self.token_placement = token_placement
-        self.max_length = max_length
-
-        processed_items: List[Dict[str, Any]] = []
-        dropped_examples = 0
-
-        for example in examples:
-            item = build_training_example_tensors(
-                tokenizer=tokenizer,
-                example=example,
-                special_tokens=special_tokens,
-                token_placement=token_placement,
-                max_length=max_length,
-            )
-            if item is None:
-                dropped_examples += 1
-            else:
-                processed_items.append(item)
-
-        self.items = processed_items
-        self.dropped_examples = dropped_examples
-
-    def __len__(self) -> int:
-        return len(self.items)
-
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
-        return self.items[idx]
-
-
-def collate_batch(batch: List[Dict[str, Any]], pad_token_id: int) -> Dict[str, Any]:
-    if len(batch) == 0:
-        raise ValueError("Received empty batch in collate_batch.")
-
-    max_len = max(item["input_ids"].shape[0] for item in batch)
-
-    input_ids_list: List[torch.Tensor] = []
-    attention_mask_list: List[torch.Tensor] = []
-    labels_list: List[torch.Tensor] = []
-    metadata_list: List[Dict[str, Any]] = []
-
-    for item in batch:
-        seq_len = item["input_ids"].shape[0]
-        pad_len = max_len - seq_len
-
-        input_ids = torch.cat(
-            [
-                item["input_ids"],
-                torch.full((pad_len,), pad_token_id, dtype=torch.long),
-            ],
-            dim=0,
-        )
-        attention_mask = torch.cat(
-            [
-                item["attention_mask"],
-                torch.zeros(pad_len, dtype=torch.long),
-            ],
-            dim=0,
-        )
-        labels = torch.cat(
-            [
-                item["labels"],
-                torch.full((pad_len,), -100, dtype=torch.long),
-            ],
-            dim=0,
-        )
-
-        input_ids_list.append(input_ids)
-        attention_mask_list.append(attention_mask)
-        labels_list.append(labels)
-        metadata_list.append(item["metadata"])
-
-    labels_tensor = torch.stack(labels_list, dim=0)
-    if (labels_tensor != -100).sum().item() == 0:
-        raise ValueError("Batch has no supervised tokens after padding/masking.")
-
-    return {
-        "input_ids": torch.stack(input_ids_list, dim=0),
-        "attention_mask": torch.stack(attention_mask_list, dim=0),
-        "labels": labels_tensor,
-        "metadata": metadata_list,
     }
 
 
@@ -594,14 +483,12 @@ def inject_special_token_embeddings(
         return
 
     if learned_rows is None:
-        raise ValueError(
-            "Expected learned_rows for non-baseline evaluation, but got None."
-        )
+        raise ValueError("Expected learned_rows for non-baseline evaluation, but got None.")
 
     if learned_rows.shape[0] != len(special_token_ids):
         raise ValueError(
-            f"Mismatch between number of learned rows ({learned_rows.shape[0]}) "
-            f"and number of special token ids ({len(special_token_ids)})."
+            f"Mismatch between learned rows ({learned_rows.shape[0]}) "
+            f"and special token ids ({len(special_token_ids)})"
         )
 
     embedding_weight = model.get_input_embeddings().weight
@@ -673,57 +560,111 @@ def build_forward_kwargs(
     return forward_kwargs
 
 
-# === CLI ===
+# === TOKENIZATION / SCORING HELPERS ===
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+def build_scoring_tensors(
+    tokenizer,
+    prompt_text: str,
+    target_text: str,
+    max_length: int,
+) -> Optional[Dict[str, torch.Tensor]]:
+    """
+    Same masking logic as training:
+    - prompt tokens are masked out in labels
+    - only target tokens contribute to loss
+    - prompt is left-truncated if needed so target is preserved
+    """
+    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+    target_ids = tokenizer.encode(target_text, add_special_tokens=False)
 
-    parser.add_argument("--repo_root", type=str, default=".")
-    parser.add_argument("--examples_path", type=str, default="data/examples.jsonl")
-    parser.add_argument("--runs_root", type=str, default="data/runs")
-    parser.add_argument("--evals_root", type=str, default="data/evals")
-    parser.add_argument("--run_name", type=str, required=True)
-    parser.add_argument("--allowed_personas", type=str, default="")
-    parser.add_argument("--allowed_styles", type=str, default="")
+    if len(target_ids) == 0:
+        return None
 
-    parser.add_argument("--generation_max_new_tokens", type=int, default=128)
-    parser.add_argument("--do_sample", action="store_true")
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top_p", type=float, default=1.0)
+    bos_ids: List[int] = []
+    if tokenizer.bos_token_id is not None:
+        bos_ids = [tokenizer.bos_token_id]
 
-    parser.add_argument(
-        "--sentence_model_name",
-        type=str,
-        default="sentence-transformers/all-MiniLM-L6-v2",
-    )
+    available_for_prompt = max_length - len(bos_ids) - len(target_ids)
 
-    parser.add_argument("--max_length", type=int, default=1024)
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--max_examples_per_bucket", type=int, default=None)
+    if available_for_prompt < 0:
+        return None
 
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--use_fp16", action="store_true")
-    parser.add_argument("--use_bf16", action="store_true")
-    parser.add_argument("--save_per_example", action="store_true")
+    if len(prompt_ids) > available_for_prompt:
+        prompt_ids = prompt_ids[-available_for_prompt:] if available_for_prompt > 0 else []
 
-    return parser.parse_args()
+    input_ids_list = bos_ids + prompt_ids + target_ids
+    input_ids = torch.tensor(input_ids_list, dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids)
+
+    labels = input_ids.clone()
+    prompt_token_count = len(bos_ids) + len(prompt_ids)
+    labels[:prompt_token_count] = -100
+
+    if (labels != -100).sum().item() == 0:
+        return None
+
+    return {
+        "input_ids": input_ids.unsqueeze(0),
+        "attention_mask": attention_mask.unsqueeze(0),
+        "labels": labels.unsqueeze(0),
+    }
 
 
-# === PROBABILISTIC EVAL HELPERS ===
+def build_generation_inputs(
+    tokenizer,
+    prompt_text: str,
+    max_length: int,
+) -> Dict[str, torch.Tensor]:
+    """
+    Generation uses the same BOS + left-truncation convention as scoring,
+    except there is no target segment.
+    """
+    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+
+    bos_ids: List[int] = []
+    if tokenizer.bos_token_id is not None:
+        bos_ids = [tokenizer.bos_token_id]
+
+    available_for_prompt = max_length - len(bos_ids)
+    if available_for_prompt < 0:
+        raise ValueError(f"max_length={max_length} is too small even for BOS.")
+
+    if len(prompt_ids) > available_for_prompt:
+        prompt_ids = prompt_ids[-available_for_prompt:] if available_for_prompt > 0 else []
+
+    input_ids = torch.tensor([bos_ids + prompt_ids], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids)
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+    }
+
 
 @torch.no_grad()
-def compute_example_loss(
+def compute_text_loss_under_prompt(
     model,
-    batch: Dict[str, Any],
+    tokenizer,
+    prompt_text: str,
+    target_text: str,
     device: torch.device,
+    max_length: int,
     position_mode: str,
     special_token_ids: List[int],
 ) -> float:
-    model.eval()
+    tensors = build_scoring_tensors(
+        tokenizer=tokenizer,
+        prompt_text=prompt_text,
+        target_text=target_text,
+        max_length=max_length,
+    )
 
-    input_ids = batch["input_ids"].to(device)
-    attention_mask = batch["attention_mask"].to(device)
-    labels = batch["labels"].to(device)
+    if tensors is None:
+        return float("nan")
+
+    input_ids = tensors["input_ids"].to(device)
+    attention_mask = tensors["attention_mask"].to(device)
+    labels = tensors["labels"].to(device)
 
     forward_kwargs = build_forward_kwargs(
         input_ids=input_ids,
@@ -742,95 +683,76 @@ def compute_example_loss(
     return float(loss.item())
 
 
-@torch.no_grad()
-def run_bucket_loss(
-    model,
-    dataset: NextUserTurnDataset,
-    tokenizer,
-    device: torch.device,
-    position_mode: str,
-    special_token_ids: List[int],
-) -> Tuple[float, List[Dict[str, Any]]]:
-    """
-    Compute teacher-forced loss example by example so we can keep exact per-example rows.
-    """
-    if len(dataset) == 0:
-        return float("nan"), []
-
-    per_example_rows: List[Dict[str, Any]] = []
-    total_loss = 0.0
-
-    for item in dataset.items:
-        batch = collate_batch([item], tokenizer.pad_token_id)
-        example_loss = compute_example_loss(
-            model=model,
-            batch=batch,
-            device=device,
-            position_mode=position_mode,
-            special_token_ids=special_token_ids,
-        )
-
-        metadata = item["metadata"]
-        row = {
-            "example_id": metadata.get("example_id"),
-            "transcript_id": metadata.get("transcript_id"),
-            "topic_id": metadata.get("topic_id"),
-            "base_persona_id": metadata.get("base_persona_id"),
-            "style_id": metadata.get("style_id"),
-            "user_turn_number": metadata.get("user_turn_number"),
-            "target_message_index": metadata.get("target_message_index"),
-            "teacher_forced_loss": example_loss,
-        }
-        per_example_rows.append(row)
-        total_loss += example_loss
-
-    mean_loss = total_loss / len(per_example_rows)
-    return mean_loss, per_example_rows
-
-
 # === GENERATION HELPERS ===
 
+def load_sentence_similarity_model(model_name: str):
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer(model_name)
+
+
 @torch.no_grad()
-def generate_next_user_turn(
+def compute_sentence_cosine_similarity(
+    sentence_model,
+    text_a: str,
+    text_b: str,
+) -> float:
+    import torch.nn.functional as F
+
+    embeddings = sentence_model.encode(
+        [text_a, text_b],
+        convert_to_tensor=True,
+        normalize_embeddings=True,
+    )
+    sim = F.cosine_similarity(embeddings[0].unsqueeze(0), embeddings[1].unsqueeze(0))
+    return float(sim.item())
+
+
+def compute_repetition_score(text: str) -> float:
+    """
+    Simple repetition proxy:
+    repeated bigram ratio = 1 - unique_bigrams / total_bigrams
+
+    0.0 means no repeated bigrams.
+    Higher means more repetition.
+    """
+    tokens = re.findall(r"\S+", text.lower())
+
+    if len(tokens) < 2:
+        return 0.0
+
+    bigrams = list(zip(tokens[:-1], tokens[1:]))
+
+    if len(bigrams) == 0:
+        return 0.0
+
+    unique_bigram_count = len(set(bigrams))
+    total_bigram_count = len(bigrams)
+
+    return 1.0 - (unique_bigram_count / total_bigram_count)
+
+
+@torch.no_grad()
+def generate_from_prompt(
     model,
     tokenizer,
-    example: Dict[str, Any],
-    special_tokens: List[str],
-    token_placement: str,
+    prompt_text: str,
     position_mode: str,
     special_token_ids: List[int],
     generation_max_new_tokens: int,
     do_sample: bool,
     temperature: float,
     top_p: float,
+    max_length: int,
     device: torch.device,
 ) -> str:
-    """
-    Important:
-    This mirrors training-time prompt construction:
-    - ONLY context_messages
-    - NO explicit external system prompt
-    - special tokens inserted before/after context
-    - trailing 'User:'
-    """
-    prompt_text = build_prompt_text(
-        example=example,
-        special_tokens=special_tokens,
-        token_placement=token_placement,
+    tensors = build_generation_inputs(
+        tokenizer=tokenizer,
+        prompt_text=prompt_text,
+        max_length=max_length,
     )
 
-    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-
-    bos_ids: List[int] = []
-    if tokenizer.bos_token_id is not None:
-        bos_ids = [tokenizer.bos_token_id]
-
-    input_ids = torch.tensor(
-        [bos_ids + prompt_ids],
-        dtype=torch.long,
-        device=device,
-    )
-    attention_mask = torch.ones_like(input_ids)
+    input_ids = tensors["input_ids"].to(device)
+    attention_mask = tensors["attention_mask"].to(device)
 
     gen_kwargs: Dict[str, Any] = {
         "input_ids": input_ids,
@@ -858,177 +780,231 @@ def generate_next_user_turn(
     return generated_text
 
 
-def load_sentence_similarity_model(model_name: str):
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(model_name)
+# === PER-EXAMPLE EVALUATION ===
 
-
-@torch.no_grad()
-def compute_sentence_cosine_similarity(
-    sentence_model,
-    text_a: str,
-    text_b: str,
-) -> float:
-    import torch.nn.functional as F
-
-    embeddings = sentence_model.encode(
-        [text_a, text_b],
-        convert_to_tensor=True,
-        normalize_embeddings=True,
-    )
-    sim = F.cosine_similarity(embeddings[0].unsqueeze(0), embeddings[1].unsqueeze(0))
-    return float(sim.item())
-
-
-def evaluate_generation_bucket(
+def evaluate_one_example(
+    example: Dict[str, Any],
     model,
     tokenizer,
-    examples: List[Dict[str, Any]],
+    sentence_model,
+    transcript_lookup: Dict[str, Dict[str, Any]],
     special_tokens: List[str],
     token_placement: str,
     position_mode: str,
     special_token_ids: List[int],
-    generation_max_new_tokens: int,
-    do_sample: bool,
-    temperature: float,
-    top_p: float,
-    sentence_model,
-    device: torch.device,
-) -> Tuple[float, List[Dict[str, Any]]]:
-    if len(examples) == 0:
-        return float("nan"), []
-
-    per_example_rows: List[Dict[str, Any]] = []
-    total_cosine = 0.0
-
-    for example in examples:
-        generated_text = generate_next_user_turn(
-            model=model,
-            tokenizer=tokenizer,
-            example=example,
-            special_tokens=special_tokens,
-            token_placement=token_placement,
-            position_mode=position_mode,
-            special_token_ids=special_token_ids,
-            generation_max_new_tokens=generation_max_new_tokens,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_p=top_p,
-            device=device,
-        )
-
-        gold_text = str(example["target_message"]).strip()
-        cosine_similarity = compute_sentence_cosine_similarity(
-            sentence_model=sentence_model,
-            text_a=generated_text,
-            text_b=gold_text,
-        )
-
-        row = {
-            "example_id": example.get("example_id"),
-            "transcript_id": example.get("transcript_id"),
-            "topic_id": example.get("topic_id"),
-            "base_persona_id": example.get("base_persona_id"),
-            "style_id": example.get("style_id"),
-            "user_turn_number": example.get("user_turn_number"),
-            "target_message_index": example.get("target_message_index"),
-            "generated_text": generated_text,
-            "gold_text": gold_text,
-            "generation_cosine_similarity": cosine_similarity,
-            "exact_match": int(generated_text.strip() == gold_text.strip()),
-        }
-        per_example_rows.append(row)
-        total_cosine += cosine_similarity
-
-    mean_cosine = total_cosine / len(per_example_rows)
-    return mean_cosine, per_example_rows
-
-
-# === BUCKET EVALUATOR ===
-
-def evaluate_one_bucket(
-    bucket_name: str,
-    bucket_examples: List[Dict[str, Any]],
-    model,
-    tokenizer,
-    special_tokens: List[str],
-    token_placement: str,
-    position_mode: str,
-    special_token_ids: List[int],
-    sentence_model,
+    default_chat_template: bool,
     eval_config: EvalConfig,
     device: torch.device,
 ) -> Dict[str, Any]:
-    dataset = NextUserTurnDataset(
-        examples=bucket_examples,
-        tokenizer=tokenizer,
-        special_tokens=special_tokens,
-        token_placement=token_placement,
-        max_length=eval_config.max_length,
+    system_llm1, system_llm2 = get_system_prompts_for_example(
+        example=example,
+        transcript_lookup=transcript_lookup,
     )
 
-    mean_loss, loss_rows = run_bucket_loss(
+    # Train-aligned prompt: this is the one that mirrors how the special-token run was trained.
+    prompt_train_aligned = build_prompt_text_train_aligned(
+        example=example,
+        special_tokens=special_tokens,
+        token_placement=token_placement,
+        default_chat_template=default_chat_template,
+    )
+
+    # Conditioned prompts: these intentionally DO NOT include learned special tokens.
+    prompt_user_conditioned = build_prompt_text_conditioned(
+        example=example,
+        conditioning_system_prompt=system_llm1,
+        default_chat_template=default_chat_template,
+    )
+
+    prompt_assistant_conditioned = build_prompt_text_conditioned(
+        example=example,
+        conditioning_system_prompt=system_llm2,
+        default_chat_template=default_chat_template,
+    )
+
+    gold_text = str(example["target_message"]).strip()
+
+    # --- gold-target probabilistic metrics ---
+    teacher_forced_loss_train_aligned = compute_text_loss_under_prompt(
         model=model,
-        dataset=dataset,
         tokenizer=tokenizer,
+        prompt_text=prompt_train_aligned,
+        target_text=gold_text,
         device=device,
+        max_length=eval_config.max_length,
         position_mode=position_mode,
         special_token_ids=special_token_ids,
     )
 
-    kept_examples_for_generation = [item["raw_example"] for item in dataset.items]
-
-    mean_cosine, generation_rows = evaluate_generation_bucket(
+    # No special tokens are present in the conditioned prompts.
+    teacher_forced_loss_user_conditioned = compute_text_loss_under_prompt(
         model=model,
         tokenizer=tokenizer,
-        examples=kept_examples_for_generation,
-        special_tokens=special_tokens,
-        token_placement=token_placement,
+        prompt_text=prompt_user_conditioned,
+        target_text=gold_text,
+        device=device,
+        max_length=eval_config.max_length,
+        position_mode=position_mode,
+        special_token_ids=[],
+    )
+
+    teacher_forced_loss_assistant_conditioned = compute_text_loss_under_prompt(
+        model=model,
+        tokenizer=tokenizer,
+        prompt_text=prompt_assistant_conditioned,
+        target_text=gold_text,
+        device=device,
+        max_length=eval_config.max_length,
+        position_mode=position_mode,
+        special_token_ids=[],
+    )
+
+    # --- generation from train-aligned prompt only ---
+    generated_text = generate_from_prompt(
+        model=model,
+        tokenizer=tokenizer,
+        prompt_text=prompt_train_aligned,
         position_mode=position_mode,
         special_token_ids=special_token_ids,
         generation_max_new_tokens=eval_config.generation_max_new_tokens,
         do_sample=eval_config.do_sample,
         temperature=eval_config.temperature,
         top_p=eval_config.top_p,
-        sentence_model=sentence_model,
+        max_length=eval_config.max_length,
         device=device,
     )
 
-    generation_by_id = {row["example_id"]: row for row in generation_rows}
-    per_example_rows: List[Dict[str, Any]] = []
-
-    for loss_row in loss_rows:
-        example_id = loss_row["example_id"]
-        merged = dict(loss_row)
-        if example_id in generation_by_id:
-            merged.update(
-                {
-                    "generated_text": generation_by_id[example_id]["generated_text"],
-                    "gold_text": generation_by_id[example_id]["gold_text"],
-                    "generation_cosine_similarity": generation_by_id[example_id]["generation_cosine_similarity"],
-                    "exact_match": generation_by_id[example_id]["exact_match"],
-                }
-            )
-        per_example_rows.append(merged)
-
-    rows_with_exact_match = [
-        row for row in per_example_rows
-        if "exact_match" in row
-    ]
-
-    exact_match_rate = (
-        sum(int(row["exact_match"]) for row in rows_with_exact_match) / len(rows_with_exact_match)
-        if len(rows_with_exact_match) > 0 else float("nan")
+    generation_cosine_similarity = compute_sentence_cosine_similarity(
+        sentence_model=sentence_model,
+        text_a=generated_text,
+        text_b=gold_text,
     )
+
+    exact_match = int(generated_text.strip() == gold_text.strip())
+    repetition_score = compute_repetition_score(generated_text)
+
+    # --- generated-text probabilistic metrics under alternative scoring regimes ---
+    generated_text_loss_user_conditioned = compute_text_loss_under_prompt(
+        model=model,
+        tokenizer=tokenizer,
+        prompt_text=prompt_user_conditioned,
+        target_text=generated_text,
+        device=device,
+        max_length=eval_config.max_length,
+        position_mode=position_mode,
+        special_token_ids=[],
+    )
+
+    generated_text_loss_assistant_conditioned = compute_text_loss_under_prompt(
+        model=model,
+        tokenizer=tokenizer,
+        prompt_text=prompt_assistant_conditioned,
+        target_text=generated_text,
+        device=device,
+        max_length=eval_config.max_length,
+        position_mode=position_mode,
+        special_token_ids=[],
+    )
+
+    return {
+        "example_id": example.get("example_id"),
+        "transcript_id": example.get("transcript_id"),
+        "topic_id": example.get("topic_id"),
+        "base_persona_id": example.get("base_persona_id"),
+        "style_id": example.get("style_id"),
+        "user_turn_number": example.get("user_turn_number"),
+        "target_message_index": example.get("target_message_index"),
+        "gold_text": gold_text,
+        "generated_text": generated_text,
+        "teacher_forced_loss_train_aligned": teacher_forced_loss_train_aligned,
+        "teacher_forced_loss_user_conditioned": teacher_forced_loss_user_conditioned,
+        "teacher_forced_loss_assistant_conditioned": teacher_forced_loss_assistant_conditioned,
+        "generation_cosine_similarity": generation_cosine_similarity,
+        "exact_match": exact_match,
+        "repetition_score": repetition_score,
+        "generated_text_loss_user_conditioned": generated_text_loss_user_conditioned,
+        "generated_text_loss_assistant_conditioned": generated_text_loss_assistant_conditioned,
+    }
+
+
+def mean_of_metric(rows: List[Dict[str, Any]], key: str) -> float:
+    values: List[float] = []
+
+    for row in rows:
+        if key not in row:
+            continue
+
+        value = row[key]
+        if value is None:
+            continue
+
+        value = float(value)
+        if math.isnan(value) or math.isinf(value):
+            continue
+
+        values.append(value)
+
+    if len(values) == 0:
+        return float("nan")
+
+    return sum(values) / len(values)
+
+
+def evaluate_one_bucket(
+    bucket_name: str,
+    bucket_examples: List[Dict[str, Any]],
+    model,
+    tokenizer,
+    sentence_model,
+    transcript_lookup: Dict[str, Dict[str, Any]],
+    special_tokens: List[str],
+    token_placement: str,
+    position_mode: str,
+    special_token_ids: List[int],
+    default_chat_template: bool,
+    eval_config: EvalConfig,
+    device: torch.device,
+) -> Dict[str, Any]:
+    per_example_rows: List[Dict[str, Any]] = []
+    dropped_examples = 0
+
+    for example in bucket_examples:
+        try:
+            row = evaluate_one_example(
+                example=example,
+                model=model,
+                tokenizer=tokenizer,
+                sentence_model=sentence_model,
+                transcript_lookup=transcript_lookup,
+                special_tokens=special_tokens,
+                token_placement=token_placement,
+                position_mode=position_mode,
+                special_token_ids=special_token_ids,
+                default_chat_template=default_chat_template,
+                eval_config=eval_config,
+                device=device,
+            )
+            per_example_rows.append(row)
+        except Exception as exc:
+            dropped_examples += 1
+            example_id = example.get("example_id")
+            print(
+                f"[warn] bucket={bucket_name} example_id={example_id} dropped during evaluation: {exc}"
+            )
 
     return {
         "bucket_name": bucket_name,
         "n_examples_raw": len(bucket_examples),
         "n_examples_used": len(per_example_rows),
-        "n_examples_dropped": dataset.dropped_examples,
-        "mean_teacher_forced_loss": mean_loss,
-        "mean_generation_cosine_similarity": mean_cosine,
-        "exact_match_rate": exact_match_rate,
+        "n_examples_dropped": dropped_examples,
+        "mean_teacher_forced_loss_train_aligned": mean_of_metric(per_example_rows, "teacher_forced_loss_train_aligned"),
+        "mean_teacher_forced_loss_user_conditioned": mean_of_metric(per_example_rows, "teacher_forced_loss_user_conditioned"),
+        "mean_teacher_forced_loss_assistant_conditioned": mean_of_metric(per_example_rows, "teacher_forced_loss_assistant_conditioned"),
+        "mean_generation_cosine_similarity": mean_of_metric(per_example_rows, "generation_cosine_similarity"),
+        "exact_match_rate": mean_of_metric(per_example_rows, "exact_match"),
+        "mean_repetition_score": mean_of_metric(per_example_rows, "repetition_score"),
+        "mean_generated_text_loss_user_conditioned": mean_of_metric(per_example_rows, "generated_text_loss_user_conditioned"),
+        "mean_generated_text_loss_assistant_conditioned": mean_of_metric(per_example_rows, "generated_text_loss_assistant_conditioned"),
         "per_example_rows": per_example_rows,
     }
 
@@ -1037,7 +1013,6 @@ def evaluate_one_bucket(
 
 def compute_bucket_deltas(bucket_results: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     deltas: Dict[str, Any] = {}
-
     matched = bucket_results["matched"]
 
     control_bucket_names = [
@@ -1046,18 +1021,24 @@ def compute_bucket_deltas(bucket_results: Dict[str, Dict[str, Any]]) -> Dict[str
         "diff_persona_diff_style",
     ]
 
+    metric_names = [
+        "mean_teacher_forced_loss_train_aligned",
+        "mean_teacher_forced_loss_user_conditioned",
+        "mean_teacher_forced_loss_assistant_conditioned",
+        "mean_generation_cosine_similarity",
+        "exact_match_rate",
+        "mean_repetition_score",
+        "mean_generated_text_loss_user_conditioned",
+        "mean_generated_text_loss_assistant_conditioned",
+    ]
+
     for control_name in control_bucket_names:
         control = bucket_results[control_name]
 
-        deltas[f"loss_delta_matched_minus_{control_name}"] = (
-            matched["mean_teacher_forced_loss"] - control["mean_teacher_forced_loss"]
-        )
-        deltas[f"cosine_delta_matched_minus_{control_name}"] = (
-            matched["mean_generation_cosine_similarity"] - control["mean_generation_cosine_similarity"]
-        )
-        deltas[f"exact_match_delta_matched_minus_{control_name}"] = (
-            matched["exact_match_rate"] - control["exact_match_rate"]
-        )
+        for metric_name in metric_names:
+            deltas[f"{metric_name}__delta_matched_minus_{control_name}"] = (
+                matched[metric_name] - control[metric_name]
+            )
 
     return deltas
 
@@ -1076,13 +1057,18 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
     train_config = run_summary["config"]
 
     examples_path = Path(config.repo_root) / config.examples_path
+    transcripts_path = Path(config.repo_root) / config.transcripts_path
+
     examples = load_jsonl(examples_path)
+    transcripts = load_jsonl(transcripts_path)
+    transcript_lookup = build_transcript_lookup(transcripts)
 
     target_base_persona_id = str(train_config["base_persona_id"])
     target_style_id = str(train_config["style_id"])
     held_out_topic_id = str(train_config["held_out_topic_id"])
     token_placement = str(train_config["token_placement"])
     position_mode = str(train_config["position_mode"])
+    default_chat_template = bool(train_config.get("default_chat_template", False))
 
     model, tokenizer, special_tokens, special_token_ids = prepare_model_and_tokenizer_from_train_config(
         train_config=train_config,
@@ -1127,11 +1113,13 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
             bucket_examples=bucket_examples,
             model=model,
             tokenizer=tokenizer,
+            sentence_model=sentence_model,
+            transcript_lookup=transcript_lookup,
             special_tokens=special_tokens,
             token_placement=token_placement,
             position_mode=position_mode,
             special_token_ids=special_token_ids,
-            sentence_model=sentence_model,
+            default_chat_template=default_chat_template,
             eval_config=config,
             device=device,
         )
@@ -1148,14 +1136,18 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
             enriched_row["num_special_tokens"] = int(train_config["num_special_tokens"])
             enriched_row["token_placement"] = token_placement
             enriched_row["position_mode"] = position_mode
+            enriched_row["default_chat_template"] = default_chat_template
             all_per_example_rows.append(enriched_row)
 
         print(
             f"[eval] bucket={bucket_name} "
             f"| n_used={bucket_result['n_examples_used']} "
-            f"| mean_loss={bucket_result['mean_teacher_forced_loss']:.6f} "
-            f"| mean_cosine={bucket_result['mean_generation_cosine_similarity']:.6f} "
-            f"| exact_match={bucket_result['exact_match_rate']:.6f}"
+            f"| train_aligned_loss={bucket_result['mean_teacher_forced_loss_train_aligned']:.6f} "
+            f"| user_loss={bucket_result['mean_teacher_forced_loss_user_conditioned']:.6f} "
+            f"| assistant_loss={bucket_result['mean_teacher_forced_loss_assistant_conditioned']:.6f} "
+            f"| cosine={bucket_result['mean_generation_cosine_similarity']:.6f} "
+            f"| exact_match={bucket_result['exact_match_rate']:.6f} "
+            f"| repetition={bucket_result['mean_repetition_score']:.6f}"
         )
 
     deltas = compute_bucket_deltas(bucket_results)
@@ -1176,9 +1168,14 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
                 "n_examples_raw": bucket_result["n_examples_raw"],
                 "n_examples_used": bucket_result["n_examples_used"],
                 "n_examples_dropped": bucket_result["n_examples_dropped"],
-                "mean_teacher_forced_loss": bucket_result["mean_teacher_forced_loss"],
+                "mean_teacher_forced_loss_train_aligned": bucket_result["mean_teacher_forced_loss_train_aligned"],
+                "mean_teacher_forced_loss_user_conditioned": bucket_result["mean_teacher_forced_loss_user_conditioned"],
+                "mean_teacher_forced_loss_assistant_conditioned": bucket_result["mean_teacher_forced_loss_assistant_conditioned"],
                 "mean_generation_cosine_similarity": bucket_result["mean_generation_cosine_similarity"],
                 "exact_match_rate": bucket_result["exact_match_rate"],
+                "mean_repetition_score": bucket_result["mean_repetition_score"],
+                "mean_generated_text_loss_user_conditioned": bucket_result["mean_generated_text_loss_user_conditioned"],
+                "mean_generated_text_loss_assistant_conditioned": bucket_result["mean_generated_text_loss_assistant_conditioned"],
             }
             for bucket_name, bucket_result in bucket_results.items()
         },
@@ -1189,10 +1186,51 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
 
     if config.save_per_example:
         per_example_path = eval_dir / "per_example_results.jsonl"
+
+        if per_example_path.exists():
+            per_example_path.unlink()
+
         for row in all_per_example_rows:
             append_jsonl(row, per_example_path)
 
     return summary
+
+
+# === CLI ===
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--repo_root", type=str, default=".")
+    parser.add_argument("--examples_path", type=str, default="data/examples.jsonl")
+    parser.add_argument("--transcripts_path", type=str, default="data/transcripts.jsonl")
+    parser.add_argument("--runs_root", type=str, default="data/runs")
+    parser.add_argument("--evals_root", type=str, default="data/evals")
+    parser.add_argument("--run_name", type=str, required=True)
+
+    parser.add_argument("--allowed_personas", type=str, default="")
+    parser.add_argument("--allowed_styles", type=str, default="")
+
+    parser.add_argument("--generation_max_new_tokens", type=int, default=128)
+    parser.add_argument("--do_sample", action="store_true")
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top_p", type=float, default=1.0)
+
+    parser.add_argument(
+        "--sentence_model_name",
+        type=str,
+        default="sentence-transformers/all-MiniLM-L6-v2",
+    )
+
+    parser.add_argument("--max_length", type=int, default=1024)
+    parser.add_argument("--max_examples_per_bucket", type=int, default=None)
+
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--use_fp16", action="store_true")
+    parser.add_argument("--use_bf16", action="store_true")
+    parser.add_argument("--save_per_example", action="store_true")
+
+    return parser.parse_args()
 
 
 # === CLI MAIN ===
@@ -1202,7 +1240,7 @@ def main() -> None:
 
     if args.use_fp16 and args.use_bf16:
         raise ValueError("Use at most one of --use_fp16 and --use_bf16.")
-    
+
     allowed_personas = (
         [x.strip() for x in args.allowed_personas.split(",") if x.strip()]
         if args.allowed_personas else None
@@ -1215,6 +1253,7 @@ def main() -> None:
     config = EvalConfig(
         repo_root=args.repo_root,
         examples_path=args.examples_path,
+        transcripts_path=args.transcripts_path,
         runs_root=args.runs_root,
         evals_root=args.evals_root,
         run_name=args.run_name,
@@ -1226,7 +1265,6 @@ def main() -> None:
         top_p=args.top_p,
         sentence_model_name=args.sentence_model_name,
         max_length=args.max_length,
-        batch_size=args.batch_size,
         max_examples_per_bucket=args.max_examples_per_bucket,
         seed=args.seed,
         use_fp16=args.use_fp16,
