@@ -171,31 +171,36 @@ def build_transcript_lookup(transcripts: List[Dict[str, Any]]) -> Dict[str, Dict
 
     for row in transcripts:
         transcript_id = row.get("transcript_id")
-        if transcript_id is None:
-            continue
-        lookup[str(transcript_id)] = row
+        conversation_id = row.get("conversation_id")
+
+        if transcript_id is not None:
+            lookup[str(transcript_id)] = row
+
+        if conversation_id is not None:
+            lookup[str(conversation_id)] = row
 
     return lookup
-
 
 def get_system_prompts_for_example(
     example: Dict[str, Any],
     transcript_lookup: Dict[str, Dict[str, Any]],
 ) -> Tuple[str, str]:
-    transcript_id = str(example["transcript_id"])
+    example_transcript_id = str(example["transcript_id"])
 
-    if transcript_id not in transcript_lookup:
-        raise KeyError(f"transcript_id={transcript_id} not found in transcripts.jsonl")
+    if example_transcript_id not in transcript_lookup:
+        raise KeyError(
+            f"example transcript_id={example_transcript_id} not found in transcripts lookup"
+        )
 
-    row = transcript_lookup[transcript_id]
+    row = transcript_lookup[example_transcript_id]
 
     system_llm1 = str(row.get("system_llm1", "")).strip()
     system_llm2 = str(row.get("system_llm2", "")).strip()
 
     if not system_llm1:
-        raise ValueError(f"Missing system_llm1 for transcript_id={transcript_id}")
+        raise ValueError(f"Missing system_llm1 for example transcript_id={example_transcript_id}")
     if not system_llm2:
-        raise ValueError(f"Missing system_llm2 for transcript_id={transcript_id}")
+        raise ValueError(f"Missing system_llm2 for example transcript_id={example_transcript_id}")
 
     return system_llm1, system_llm2
 
