@@ -1,5 +1,10 @@
 # special-token/evaluate_special_token.py
 
+# TO FIX - DO NOT RUN ON ENTIRE EVAL SET YET
+## fix truncation for the conditioned cases (rn the truncationtakes out the system prompts)
+## figure out whether we should compute P(gold|system prompt+context+special_tokens) or P(gold|system prompt+context) for the user/assistant (currently doing the latter but that means the special tokens not are part of the scoring prompt, which may not be ideal?)
+## other metrics? should we still keep the cosine similarity? is P(generated|)
+
 # === IMPORTS ===
 
 import argparse
