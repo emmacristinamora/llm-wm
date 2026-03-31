@@ -53,7 +53,7 @@ class TrainConfig:
     grad_accum_steps: int = 1
     max_grad_norm: float = 0.5
     eval_every_steps: int = 20
-    save_per_eval: bool = False # Whether to save the embedding checkpoint after every epoch
+    save_per_epoch: bool = False # Whether to save the embedding checkpoint after every epoch
 
     # reproducibility / precision
     seed: int = 42
@@ -1027,7 +1027,8 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         )
         val_losses.append(val_loss)
 
-        if config.save_per_eval:
+        if config.save_per_epoch:
+            # TODO: Function for this...
             if len(special_token_ids) > 0:
                 special_rows = get_special_token_embedding_rows(model, special_token_ids)
                 if special_rows is not None:
@@ -1136,7 +1137,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad_accum_steps", type=int, default=1)
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
     parser.add_argument("--eval_every_steps", type=int, default=20)
-    parser.add_argument("--save_per_eval", action="store_true")
+    parser.add_argument("--save_per_epoch", action="store_true")
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use_fp16", action="store_true")
@@ -1174,7 +1175,7 @@ def main() -> None:
         grad_accum_steps=args.grad_accum_steps,
         max_grad_norm=args.max_grad_norm,
         eval_every_steps=args.eval_every_steps,
-        save_per_eval=args.save_per_eval,
+        save_per_epoch=args.save_per_epoch,
         seed=args.seed,
         use_fp16=args.use_fp16,
         use_bf16=args.use_bf16,
