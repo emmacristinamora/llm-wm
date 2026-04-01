@@ -31,16 +31,16 @@ notebooks/**/.ipynb_checkpoints/
 .vscode/
 .idea/
 
-# runs
-data/runs_qwen3_fixed/*
-!data/runs_qwen3_fixed/runs_summary.jsonl
+# # runs
+# data/runs_qwen3_fixed/*
+# !data/runs_qwen3_fixed/runs_summary.jsonl
 
-# allow run directories themselves
-!data/runs_qwen3_fixed/*/
+# # allow run directories themselves
+# !data/runs_qwen3_fixed/*/
 
-# ignore everything inside each run directory
-data/runs_qwen3_fixed/*/*
+# # ignore everything inside each run directory
+# data/runs_qwen3_fixed/*/*
 
-# then re-allow only the two files we want
-!data/runs_qwen3_fixed/*/run_summary.json
-!data/runs_qwen3_fixed/*/special_token_embeddings.pt
+# # then re-allow only the two files we want
+# !data/runs_qwen3_fixed/*/run_summary.json
+# !data/runs_qwen3_fixed/*/special_token_embeddings.pt
