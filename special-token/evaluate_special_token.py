@@ -1,10 +1,5 @@
 # special-token/evaluate_special_token.py
 
-# TO FIX - DO NOT RUN ON ENTIRE EVAL SET YET
-## fix truncation for the conditioned cases (rn the truncationtakes out the system prompts)
-## figure out whether we should compute P(gold|system prompt+context+special_tokens) or P(gold|system prompt+context) for the user/assistant (currently doing the latter but that means the special tokens not are part of the scoring prompt, which may not be ideal?)
-## other metrics? should we still keep the cosine similarity? is P(generated|)
-
 # === IMPORTS ===
 
 import argparse
@@ -186,6 +181,7 @@ def build_transcript_lookup(transcripts: List[Dict[str, Any]]) -> Dict[str, Dict
 
     return lookup
 
+
 def get_system_prompts_for_example(
     example: Dict[str, Any],
     transcript_lookup: Dict[str, Dict[str, Any]],
@@ -265,78 +261,89 @@ def strip_system_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]
     ]
 
 
-def build_prompt_text_train_aligned(
+def get_target_prefix(default_chat_template: bool) -> str:
+    return "<|im_start|>user\n" if default_chat_template else "User:"
+
+
+def build_prompt_parts_train_aligned(
     example: Dict[str, Any],
     special_tokens: List[str],
     token_placement: str,
     default_chat_template: bool,
-) -> str:
-    """
-    Mirrors training.
-
-    Important:
-    - uses example["context_messages"] exactly as stored
-    - does not inject transcript system prompts
-    - inserts learned special tokens before/after context
-    - ends with a fresh user header because target_message is the next user turn
-    """
+) -> Dict[str, str]:
     context_text = render_messages(
         example["context_messages"],
         default_chat_template=default_chat_template,
     )
-    special_text = "".join(special_tokens)
 
-    if len(special_tokens) == 0:
-        conditioned_context = f"{context_text}\n"
-    else:
-        if token_placement == "before_context":
-            conditioned_context = f"{special_text}\n{context_text}\n".strip()
-        elif token_placement == "after_context":
-            conditioned_context = f"{context_text}\n{special_text}\n".strip()
-        else:
-            raise ValueError(f"Unsupported token_placement: {token_placement}")
-
-    if default_chat_template:
-        return f"{conditioned_context}<|im_start|>user\n"
-
-    return f"{conditioned_context}User:"
+    return {
+        "system_text": "",
+        "context_text": context_text,
+        "special_text": "".join(special_tokens),
+        "target_prefix_text": get_target_prefix(default_chat_template),
+        "token_placement": token_placement,
+    }
 
 
-def build_prompt_text_conditioned(
+def build_prompt_parts_conditioned(
     example: Dict[str, Any],
     conditioning_system_prompt: str,
+    special_tokens: List[str],
+    include_special_tokens: bool,
+    token_placement: str,
     default_chat_template: bool,
-) -> str:
-    """
-    Prompt used for alternative conditioned scoring.
-
-    Important:
-    - injects explicit transcript-level system prompt
-    - removes system messages from example context so we do not duplicate them
-    - DOES NOT include learned special tokens
-
-    This is intentional: these metrics are meant to answer
-    "how plausible is this text under the user-conditioned or assistant-conditioned
-    prompting regime?"
-    rather than
-    "how plausible is it under system prompt + learned tokens together?"
-    """
+) -> Dict[str, str]:
     non_system_context = strip_system_messages(example["context_messages"])
 
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": conditioning_system_prompt},
-        *non_system_context,
-    ]
-
-    context_text = render_messages(
-        messages,
+    system_text = format_message(
+        role="system",
+        content=conditioning_system_prompt,
         default_chat_template=default_chat_template,
     )
 
-    if default_chat_template:
-        return f"{context_text}\n<|im_start|>user\n"
+    context_text = render_messages(
+        non_system_context,
+        default_chat_template=default_chat_template,
+    ) if len(non_system_context) > 0 else ""
 
-    return f"{context_text}\nUser:"
+    return {
+        "system_text": system_text,
+        "context_text": context_text,
+        "special_text": "".join(special_tokens) if include_special_tokens else "",
+        "target_prefix_text": get_target_prefix(default_chat_template),
+        "token_placement": token_placement,
+    }
+
+
+def build_prompt_text_from_parts(
+    system_text: str,
+    context_text: str,
+    special_text: str,
+    target_prefix_text: str,
+    token_placement: str,
+) -> str:
+    blocks: List[str] = []
+
+    if system_text:
+        blocks.append(system_text)
+
+    if token_placement == "before_context":
+        if special_text:
+            blocks.append(special_text)
+        if context_text:
+            blocks.append(context_text)
+    elif token_placement == "after_context":
+        if context_text:
+            blocks.append(context_text)
+        if special_text:
+            blocks.append(special_text)
+    else:
+        raise ValueError(f"Unsupported token_placement: {token_placement}")
+
+    if len(blocks) == 0:
+        return target_prefix_text
+
+    return "\n".join(blocks) + "\n" + target_prefix_text
 
 
 # === SPLIT / BUCKET HELPERS ===
@@ -572,19 +579,268 @@ def build_forward_kwargs(
 
 # === TOKENIZATION / SCORING HELPERS ===
 
-def build_scoring_tensors(
+def build_prompt_segment_ids(
     tokenizer,
-    prompt_text: str,
+    system_text: str,
+    context_text: str,
+    special_text: str,
+    target_prefix_text: str,
+    token_placement: str,
+) -> Dict[str, List[int]]:
+    """
+    We tokenize the major prompt components separately so that we can preserve:
+    - system prompt
+    - special tokens
+    - target prefix
+
+    and only truncate the context segment when needed.
+    """
+    system_ids = tokenizer.encode(
+        system_text + "\n",
+        add_special_tokens=False,
+    ) if system_text else []
+
+    context_ids = tokenizer.encode(
+        context_text + "\n",
+        add_special_tokens=False,
+    ) if context_text else []
+
+    special_ids = tokenizer.encode(
+        special_text + "\n",
+        add_special_tokens=False,
+    ) if special_text else []
+
+    target_prefix_ids = tokenizer.encode(
+        target_prefix_text,
+        add_special_tokens=False,
+    )
+
+    if token_placement not in {"before_context", "after_context"}:
+        raise ValueError(f"Unsupported token_placement: {token_placement}")
+
+    return {
+        "system_ids": system_ids,
+        "context_ids": context_ids,
+        "special_ids": special_ids,
+        "target_prefix_ids": target_prefix_ids,
+    }
+
+
+def fit_prompt_segments_for_scoring(
+    system_ids: List[int],
+    context_ids: List[int],
+    special_ids: List[int],
+    target_prefix_ids: List[int],
+    target_ids: List[int],
+    bos_ids: List[int],
+    max_length: int,
+    token_placement: str,
+) -> Optional[List[int]]:
+    """
+    Truncation policy for scoring:
+    1. preserve target completely
+    2. preserve target prefix completely
+    3. preserve special tokens completely
+    4. preserve as much of system prompt as possible
+    5. truncate context first, from the left
+    6. if still too long, truncate system prompt from the right as a last resort
+
+    The point is to avoid silently losing the system prompt just because the whole
+    conditioned prompt is long.
+    """
+    if token_placement not in {"before_context", "after_context"}:
+        raise ValueError(f"Unsupported token_placement: {token_placement}")
+
+    if len(target_ids) == 0:
+        return None
+
+    fixed_without_context = (
+        len(bos_ids)
+        + len(target_ids)
+        + len(special_ids)
+        + len(target_prefix_ids)
+        + len(system_ids)
+    )
+
+    available_for_context = max_length - fixed_without_context
+
+    if available_for_context >= 0:
+        fitted_context_ids = (
+            context_ids[-available_for_context:] if available_for_context > 0 else []
+        )
+        fitted_system_ids = system_ids
+    else:
+        fitted_context_ids = []
+
+        available_for_system = (
+            max_length
+            - len(bos_ids)
+            - len(target_ids)
+            - len(special_ids)
+            - len(target_prefix_ids)
+        )
+
+        if available_for_system < 0:
+            return None
+
+        fitted_system_ids = system_ids[:available_for_system]
+
+    if token_placement == "before_context":
+        prompt_ids = (
+            fitted_system_ids
+            + special_ids
+            + fitted_context_ids
+            + target_prefix_ids
+        )
+    else:
+        prompt_ids = (
+            fitted_system_ids
+            + fitted_context_ids
+            + special_ids
+            + target_prefix_ids
+        )
+
+    total_len = len(bos_ids) + len(prompt_ids) + len(target_ids)
+    if total_len > max_length:
+        overflow = total_len - max_length
+
+        if len(fitted_context_ids) >= overflow:
+            fitted_context_ids = fitted_context_ids[overflow:]
+        else:
+            overflow -= len(fitted_context_ids)
+            fitted_context_ids = []
+
+            if len(fitted_system_ids) >= overflow:
+                fitted_system_ids = fitted_system_ids[:-overflow] if overflow > 0 else fitted_system_ids
+            else:
+                return None
+
+        if token_placement == "before_context":
+            prompt_ids = (
+                fitted_system_ids
+                + special_ids
+                + fitted_context_ids
+                + target_prefix_ids
+            )
+        else:
+            prompt_ids = (
+                fitted_system_ids
+                + fitted_context_ids
+                + special_ids
+                + target_prefix_ids
+            )
+
+    if len(bos_ids) + len(prompt_ids) + len(target_ids) > max_length:
+        return None
+
+    return prompt_ids
+
+
+def fit_prompt_segments_for_generation(
+    system_ids: List[int],
+    context_ids: List[int],
+    special_ids: List[int],
+    target_prefix_ids: List[int],
+    bos_ids: List[int],
+    max_length: int,
+    token_placement: str,
+) -> Optional[List[int]]:
+    """
+    Same logic as scoring, but without a target segment.
+    """
+    if token_placement not in {"before_context", "after_context"}:
+        raise ValueError(f"Unsupported token_placement: {token_placement}")
+
+    fixed_without_context = (
+        len(bos_ids)
+        + len(special_ids)
+        + len(target_prefix_ids)
+        + len(system_ids)
+    )
+
+    available_for_context = max_length - fixed_without_context
+
+    if available_for_context >= 0:
+        fitted_context_ids = (
+            context_ids[-available_for_context:] if available_for_context > 0 else []
+        )
+        fitted_system_ids = system_ids
+    else:
+        fitted_context_ids = []
+
+        available_for_system = (
+            max_length
+            - len(bos_ids)
+            - len(special_ids)
+            - len(target_prefix_ids)
+        )
+
+        if available_for_system < 0:
+            return None
+
+        fitted_system_ids = system_ids[:available_for_system]
+
+    if token_placement == "before_context":
+        prompt_ids = (
+            fitted_system_ids
+            + special_ids
+            + fitted_context_ids
+            + target_prefix_ids
+        )
+    else:
+        prompt_ids = (
+            fitted_system_ids
+            + fitted_context_ids
+            + special_ids
+            + target_prefix_ids
+        )
+
+    total_len = len(bos_ids) + len(prompt_ids)
+    if total_len > max_length:
+        overflow = total_len - max_length
+
+        if len(fitted_context_ids) >= overflow:
+            fitted_context_ids = fitted_context_ids[overflow:]
+        else:
+            overflow -= len(fitted_context_ids)
+            fitted_context_ids = []
+
+            if len(fitted_system_ids) >= overflow:
+                fitted_system_ids = fitted_system_ids[:-overflow] if overflow > 0 else fitted_system_ids
+            else:
+                return None
+
+        if token_placement == "before_context":
+            prompt_ids = (
+                fitted_system_ids
+                + special_ids
+                + fitted_context_ids
+                + target_prefix_ids
+            )
+        else:
+            prompt_ids = (
+                fitted_system_ids
+                + fitted_context_ids
+                + special_ids
+                + target_prefix_ids
+            )
+
+    if len(bos_ids) + len(prompt_ids) > max_length:
+        return None
+
+    return prompt_ids
+
+
+def build_scoring_tensors_from_parts(
+    tokenizer,
+    system_text: str,
+    context_text: str,
+    special_text: str,
+    target_prefix_text: str,
     target_text: str,
+    token_placement: str,
     max_length: int,
 ) -> Optional[Dict[str, torch.Tensor]]:
-    """
-    Same masking logic as training:
-    - prompt tokens are masked out in labels
-    - only target tokens contribute to loss
-    - prompt is left-truncated if needed so target is preserved
-    """
-    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
     target_ids = tokenizer.encode(target_text, add_special_tokens=False)
 
     if len(target_ids) == 0:
@@ -594,13 +850,28 @@ def build_scoring_tensors(
     if tokenizer.bos_token_id is not None:
         bos_ids = [tokenizer.bos_token_id]
 
-    available_for_prompt = max_length - len(bos_ids) - len(target_ids)
+    segment_ids = build_prompt_segment_ids(
+        tokenizer=tokenizer,
+        system_text=system_text,
+        context_text=context_text,
+        special_text=special_text,
+        target_prefix_text=target_prefix_text,
+        token_placement=token_placement,
+    )
 
-    if available_for_prompt < 0:
+    prompt_ids = fit_prompt_segments_for_scoring(
+        system_ids=segment_ids["system_ids"],
+        context_ids=segment_ids["context_ids"],
+        special_ids=segment_ids["special_ids"],
+        target_prefix_ids=segment_ids["target_prefix_ids"],
+        target_ids=target_ids,
+        bos_ids=bos_ids,
+        max_length=max_length,
+        token_placement=token_placement,
+    )
+
+    if prompt_ids is None:
         return None
-
-    if len(prompt_ids) > available_for_prompt:
-        prompt_ids = prompt_ids[-available_for_prompt:] if available_for_prompt > 0 else []
 
     input_ids_list = bos_ids + prompt_ids + target_ids
     input_ids = torch.tensor(input_ids_list, dtype=torch.long)
@@ -620,27 +891,40 @@ def build_scoring_tensors(
     }
 
 
-def build_generation_inputs(
+def build_generation_inputs_from_parts(
     tokenizer,
-    prompt_text: str,
+    system_text: str,
+    context_text: str,
+    special_text: str,
+    target_prefix_text: str,
+    token_placement: str,
     max_length: int,
-) -> Dict[str, torch.Tensor]:
-    """
-    Generation uses the same BOS + left-truncation convention as scoring,
-    except there is no target segment.
-    """
-    prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-
+) -> Optional[Dict[str, torch.Tensor]]:
     bos_ids: List[int] = []
     if tokenizer.bos_token_id is not None:
         bos_ids = [tokenizer.bos_token_id]
 
-    available_for_prompt = max_length - len(bos_ids)
-    if available_for_prompt < 0:
-        raise ValueError(f"max_length={max_length} is too small even for BOS.")
+    segment_ids = build_prompt_segment_ids(
+        tokenizer=tokenizer,
+        system_text=system_text,
+        context_text=context_text,
+        special_text=special_text,
+        target_prefix_text=target_prefix_text,
+        token_placement=token_placement,
+    )
 
-    if len(prompt_ids) > available_for_prompt:
-        prompt_ids = prompt_ids[-available_for_prompt:] if available_for_prompt > 0 else []
+    prompt_ids = fit_prompt_segments_for_generation(
+        system_ids=segment_ids["system_ids"],
+        context_ids=segment_ids["context_ids"],
+        special_ids=segment_ids["special_ids"],
+        target_prefix_ids=segment_ids["target_prefix_ids"],
+        bos_ids=bos_ids,
+        max_length=max_length,
+        token_placement=token_placement,
+    )
+
+    if prompt_ids is None:
+        return None
 
     input_ids = torch.tensor([bos_ids + prompt_ids], dtype=torch.long)
     attention_mask = torch.ones_like(input_ids)
@@ -652,20 +936,28 @@ def build_generation_inputs(
 
 
 @torch.no_grad()
-def compute_text_loss_under_prompt(
+def compute_text_loss_under_parts(
     model,
     tokenizer,
-    prompt_text: str,
+    system_text: str,
+    context_text: str,
+    special_text: str,
+    target_prefix_text: str,
     target_text: str,
     device: torch.device,
     max_length: int,
+    token_placement: str,
     position_mode: str,
     special_token_ids: List[int],
 ) -> float:
-    tensors = build_scoring_tensors(
+    tensors = build_scoring_tensors_from_parts(
         tokenizer=tokenizer,
-        prompt_text=prompt_text,
+        system_text=system_text,
+        context_text=context_text,
+        special_text=special_text,
+        target_prefix_text=target_prefix_text,
         target_text=target_text,
+        token_placement=token_placement,
         max_length=max_length,
     )
 
@@ -719,7 +1011,6 @@ def compute_sentence_cosine_similarity(
 
 def compute_repetition_score(text: str) -> float:
     """
-    Simple repetition proxy:
     repeated bigram ratio = 1 - unique_bigrams / total_bigrams
 
     0.0 means no repeated bigrams.
@@ -742,10 +1033,14 @@ def compute_repetition_score(text: str) -> float:
 
 
 @torch.no_grad()
-def generate_from_prompt(
+def generate_from_parts(
     model,
     tokenizer,
-    prompt_text: str,
+    system_text: str,
+    context_text: str,
+    special_text: str,
+    target_prefix_text: str,
+    token_placement: str,
     position_mode: str,
     special_token_ids: List[int],
     generation_max_new_tokens: int,
@@ -755,11 +1050,18 @@ def generate_from_prompt(
     max_length: int,
     device: torch.device,
 ) -> str:
-    tensors = build_generation_inputs(
+    tensors = build_generation_inputs_from_parts(
         tokenizer=tokenizer,
-        prompt_text=prompt_text,
+        system_text=system_text,
+        context_text=context_text,
+        special_text=special_text,
+        target_prefix_text=target_prefix_text,
+        token_placement=token_placement,
         max_length=max_length,
     )
+
+    if tensors is None:
+        return ""
 
     input_ids = tensors["input_ids"].to(device)
     attention_mask = tensors["attention_mask"].to(device)
@@ -811,69 +1113,136 @@ def evaluate_one_example(
         transcript_lookup=transcript_lookup,
     )
 
-    # Train-aligned prompt: this is the one that mirrors how the special-token run was trained.
-    prompt_train_aligned = build_prompt_text_train_aligned(
+    prompt_parts_train_aligned = build_prompt_parts_train_aligned(
         example=example,
         special_tokens=special_tokens,
         token_placement=token_placement,
         default_chat_template=default_chat_template,
     )
 
-    # Conditioned prompts: these intentionally DO NOT include learned special tokens.
-    prompt_user_conditioned = build_prompt_text_conditioned(
+    prompt_parts_user_without_st = build_prompt_parts_conditioned(
         example=example,
         conditioning_system_prompt=system_llm1,
+        special_tokens=special_tokens,
+        include_special_tokens=False,
+        token_placement=token_placement,
         default_chat_template=default_chat_template,
     )
 
-    prompt_assistant_conditioned = build_prompt_text_conditioned(
+    prompt_parts_user_with_st = build_prompt_parts_conditioned(
+        example=example,
+        conditioning_system_prompt=system_llm1,
+        special_tokens=special_tokens,
+        include_special_tokens=True,
+        token_placement=token_placement,
+        default_chat_template=default_chat_template,
+    )
+
+    prompt_parts_assistant_without_st = build_prompt_parts_conditioned(
         example=example,
         conditioning_system_prompt=system_llm2,
+        special_tokens=special_tokens,
+        include_special_tokens=False,
+        token_placement=token_placement,
+        default_chat_template=default_chat_template,
+    )
+
+    prompt_parts_assistant_with_st = build_prompt_parts_conditioned(
+        example=example,
+        conditioning_system_prompt=system_llm2,
+        special_tokens=special_tokens,
+        include_special_tokens=True,
+        token_placement=token_placement,
         default_chat_template=default_chat_template,
     )
 
     gold_text = str(example["target_message"]).strip()
 
-    # --- gold-target probabilistic metrics ---
-    teacher_forced_loss_train_aligned = compute_text_loss_under_prompt(
+    # --- gold-target likelihoods ---
+    teacher_forced_loss_train_aligned = compute_text_loss_under_parts(
         model=model,
         tokenizer=tokenizer,
-        prompt_text=prompt_train_aligned,
+        system_text=prompt_parts_train_aligned["system_text"],
+        context_text=prompt_parts_train_aligned["context_text"],
+        special_text=prompt_parts_train_aligned["special_text"],
+        target_prefix_text=prompt_parts_train_aligned["target_prefix_text"],
         target_text=gold_text,
         device=device,
         max_length=eval_config.max_length,
+        token_placement=prompt_parts_train_aligned["token_placement"],
         position_mode=position_mode,
         special_token_ids=special_token_ids,
     )
 
-    # No special tokens are present in the conditioned prompts.
-    teacher_forced_loss_user_conditioned = compute_text_loss_under_prompt(
+    teacher_forced_loss_user_conditioned_without_st = compute_text_loss_under_parts(
         model=model,
         tokenizer=tokenizer,
-        prompt_text=prompt_user_conditioned,
+        system_text=prompt_parts_user_without_st["system_text"],
+        context_text=prompt_parts_user_without_st["context_text"],
+        special_text=prompt_parts_user_without_st["special_text"],
+        target_prefix_text=prompt_parts_user_without_st["target_prefix_text"],
         target_text=gold_text,
         device=device,
         max_length=eval_config.max_length,
+        token_placement=prompt_parts_user_without_st["token_placement"],
         position_mode=position_mode,
         special_token_ids=[],
     )
 
-    teacher_forced_loss_assistant_conditioned = compute_text_loss_under_prompt(
+    teacher_forced_loss_user_conditioned_with_st = compute_text_loss_under_parts(
         model=model,
         tokenizer=tokenizer,
-        prompt_text=prompt_assistant_conditioned,
+        system_text=prompt_parts_user_with_st["system_text"],
+        context_text=prompt_parts_user_with_st["context_text"],
+        special_text=prompt_parts_user_with_st["special_text"],
+        target_prefix_text=prompt_parts_user_with_st["target_prefix_text"],
         target_text=gold_text,
         device=device,
         max_length=eval_config.max_length,
+        token_placement=prompt_parts_user_with_st["token_placement"],
+        position_mode=position_mode,
+        special_token_ids=special_token_ids,
+    )
+
+    teacher_forced_loss_assistant_conditioned_without_st = compute_text_loss_under_parts(
+        model=model,
+        tokenizer=tokenizer,
+        system_text=prompt_parts_assistant_without_st["system_text"],
+        context_text=prompt_parts_assistant_without_st["context_text"],
+        special_text=prompt_parts_assistant_without_st["special_text"],
+        target_prefix_text=prompt_parts_assistant_without_st["target_prefix_text"],
+        target_text=gold_text,
+        device=device,
+        max_length=eval_config.max_length,
+        token_placement=prompt_parts_assistant_without_st["token_placement"],
         position_mode=position_mode,
         special_token_ids=[],
     )
 
-    # --- generation from train-aligned prompt only ---
-    generated_text = generate_from_prompt(
+    teacher_forced_loss_assistant_conditioned_with_st = compute_text_loss_under_parts(
         model=model,
         tokenizer=tokenizer,
-        prompt_text=prompt_train_aligned,
+        system_text=prompt_parts_assistant_with_st["system_text"],
+        context_text=prompt_parts_assistant_with_st["context_text"],
+        special_text=prompt_parts_assistant_with_st["special_text"],
+        target_prefix_text=prompt_parts_assistant_with_st["target_prefix_text"],
+        target_text=gold_text,
+        device=device,
+        max_length=eval_config.max_length,
+        token_placement=prompt_parts_assistant_with_st["token_placement"],
+        position_mode=position_mode,
+        special_token_ids=special_token_ids,
+    )
+
+    # --- generation quality ---
+    generated_text = generate_from_parts(
+        model=model,
+        tokenizer=tokenizer,
+        system_text=prompt_parts_train_aligned["system_text"],
+        context_text=prompt_parts_train_aligned["context_text"],
+        special_text=prompt_parts_train_aligned["special_text"],
+        target_prefix_text=prompt_parts_train_aligned["target_prefix_text"],
+        token_placement=prompt_parts_train_aligned["token_placement"],
         position_mode=position_mode,
         special_token_ids=special_token_ids,
         generation_max_new_tokens=eval_config.generation_max_new_tokens,
@@ -888,32 +1257,70 @@ def evaluate_one_example(
         sentence_model=sentence_model,
         text_a=generated_text,
         text_b=gold_text,
-    )
+    ) if generated_text else float("nan")
 
-    exact_match = int(generated_text.strip() == gold_text.strip())
+    exact_match = int(generated_text.strip() == gold_text.strip()) if generated_text else 0
     repetition_score = compute_repetition_score(generated_text)
 
-    # --- generated-text probabilistic metrics under alternative scoring regimes ---
-    generated_text_loss_user_conditioned = compute_text_loss_under_prompt(
+    # --- generated-text likelihoods ---
+    generated_text_loss_user_conditioned_without_st = compute_text_loss_under_parts(
         model=model,
         tokenizer=tokenizer,
-        prompt_text=prompt_user_conditioned,
+        system_text=prompt_parts_user_without_st["system_text"],
+        context_text=prompt_parts_user_without_st["context_text"],
+        special_text=prompt_parts_user_without_st["special_text"],
+        target_prefix_text=prompt_parts_user_without_st["target_prefix_text"],
         target_text=generated_text,
         device=device,
         max_length=eval_config.max_length,
+        token_placement=prompt_parts_user_without_st["token_placement"],
         position_mode=position_mode,
         special_token_ids=[],
     )
 
-    generated_text_loss_assistant_conditioned = compute_text_loss_under_prompt(
+    generated_text_loss_user_conditioned_with_st = compute_text_loss_under_parts(
         model=model,
         tokenizer=tokenizer,
-        prompt_text=prompt_assistant_conditioned,
+        system_text=prompt_parts_user_with_st["system_text"],
+        context_text=prompt_parts_user_with_st["context_text"],
+        special_text=prompt_parts_user_with_st["special_text"],
+        target_prefix_text=prompt_parts_user_with_st["target_prefix_text"],
         target_text=generated_text,
         device=device,
         max_length=eval_config.max_length,
+        token_placement=prompt_parts_user_with_st["token_placement"],
+        position_mode=position_mode,
+        special_token_ids=special_token_ids,
+    )
+
+    generated_text_loss_assistant_conditioned_without_st = compute_text_loss_under_parts(
+        model=model,
+        tokenizer=tokenizer,
+        system_text=prompt_parts_assistant_without_st["system_text"],
+        context_text=prompt_parts_assistant_without_st["context_text"],
+        special_text=prompt_parts_assistant_without_st["special_text"],
+        target_prefix_text=prompt_parts_assistant_without_st["target_prefix_text"],
+        target_text=generated_text,
+        device=device,
+        max_length=eval_config.max_length,
+        token_placement=prompt_parts_assistant_without_st["token_placement"],
         position_mode=position_mode,
         special_token_ids=[],
+    )
+
+    generated_text_loss_assistant_conditioned_with_st = compute_text_loss_under_parts(
+        model=model,
+        tokenizer=tokenizer,
+        system_text=prompt_parts_assistant_with_st["system_text"],
+        context_text=prompt_parts_assistant_with_st["context_text"],
+        special_text=prompt_parts_assistant_with_st["special_text"],
+        target_prefix_text=prompt_parts_assistant_with_st["target_prefix_text"],
+        target_text=generated_text,
+        device=device,
+        max_length=eval_config.max_length,
+        token_placement=prompt_parts_assistant_with_st["token_placement"],
+        position_mode=position_mode,
+        special_token_ids=special_token_ids,
     )
 
     return {
@@ -926,14 +1333,21 @@ def evaluate_one_example(
         "target_message_index": example.get("target_message_index"),
         "gold_text": gold_text,
         "generated_text": generated_text,
+
         "teacher_forced_loss_train_aligned": teacher_forced_loss_train_aligned,
-        "teacher_forced_loss_user_conditioned": teacher_forced_loss_user_conditioned,
-        "teacher_forced_loss_assistant_conditioned": teacher_forced_loss_assistant_conditioned,
+        "teacher_forced_loss_user_conditioned_without_st": teacher_forced_loss_user_conditioned_without_st,
+        "teacher_forced_loss_user_conditioned_with_st": teacher_forced_loss_user_conditioned_with_st,
+        "teacher_forced_loss_assistant_conditioned_without_st": teacher_forced_loss_assistant_conditioned_without_st,
+        "teacher_forced_loss_assistant_conditioned_with_st": teacher_forced_loss_assistant_conditioned_with_st,
+
         "generation_cosine_similarity": generation_cosine_similarity,
         "exact_match": exact_match,
         "repetition_score": repetition_score,
-        "generated_text_loss_user_conditioned": generated_text_loss_user_conditioned,
-        "generated_text_loss_assistant_conditioned": generated_text_loss_assistant_conditioned,
+
+        "generated_text_loss_user_conditioned_without_st": generated_text_loss_user_conditioned_without_st,
+        "generated_text_loss_user_conditioned_with_st": generated_text_loss_user_conditioned_with_st,
+        "generated_text_loss_assistant_conditioned_without_st": generated_text_loss_assistant_conditioned_without_st,
+        "generated_text_loss_assistant_conditioned_with_st": generated_text_loss_assistant_conditioned_with_st,
     }
 
 
@@ -1007,14 +1421,22 @@ def evaluate_one_bucket(
         "n_examples_raw": len(bucket_examples),
         "n_examples_used": len(per_example_rows),
         "n_examples_dropped": dropped_examples,
+
         "mean_teacher_forced_loss_train_aligned": mean_of_metric(per_example_rows, "teacher_forced_loss_train_aligned"),
-        "mean_teacher_forced_loss_user_conditioned": mean_of_metric(per_example_rows, "teacher_forced_loss_user_conditioned"),
-        "mean_teacher_forced_loss_assistant_conditioned": mean_of_metric(per_example_rows, "teacher_forced_loss_assistant_conditioned"),
+        "mean_teacher_forced_loss_user_conditioned_without_st": mean_of_metric(per_example_rows, "teacher_forced_loss_user_conditioned_without_st"),
+        "mean_teacher_forced_loss_user_conditioned_with_st": mean_of_metric(per_example_rows, "teacher_forced_loss_user_conditioned_with_st"),
+        "mean_teacher_forced_loss_assistant_conditioned_without_st": mean_of_metric(per_example_rows, "teacher_forced_loss_assistant_conditioned_without_st"),
+        "mean_teacher_forced_loss_assistant_conditioned_with_st": mean_of_metric(per_example_rows, "teacher_forced_loss_assistant_conditioned_with_st"),
+
         "mean_generation_cosine_similarity": mean_of_metric(per_example_rows, "generation_cosine_similarity"),
         "exact_match_rate": mean_of_metric(per_example_rows, "exact_match"),
         "mean_repetition_score": mean_of_metric(per_example_rows, "repetition_score"),
-        "mean_generated_text_loss_user_conditioned": mean_of_metric(per_example_rows, "generated_text_loss_user_conditioned"),
-        "mean_generated_text_loss_assistant_conditioned": mean_of_metric(per_example_rows, "generated_text_loss_assistant_conditioned"),
+
+        "mean_generated_text_loss_user_conditioned_without_st": mean_of_metric(per_example_rows, "generated_text_loss_user_conditioned_without_st"),
+        "mean_generated_text_loss_user_conditioned_with_st": mean_of_metric(per_example_rows, "generated_text_loss_user_conditioned_with_st"),
+        "mean_generated_text_loss_assistant_conditioned_without_st": mean_of_metric(per_example_rows, "generated_text_loss_assistant_conditioned_without_st"),
+        "mean_generated_text_loss_assistant_conditioned_with_st": mean_of_metric(per_example_rows, "generated_text_loss_assistant_conditioned_with_st"),
+
         "per_example_rows": per_example_rows,
     }
 
@@ -1033,13 +1455,17 @@ def compute_bucket_deltas(bucket_results: Dict[str, Dict[str, Any]]) -> Dict[str
 
     metric_names = [
         "mean_teacher_forced_loss_train_aligned",
-        "mean_teacher_forced_loss_user_conditioned",
-        "mean_teacher_forced_loss_assistant_conditioned",
+        "mean_teacher_forced_loss_user_conditioned_without_st",
+        "mean_teacher_forced_loss_user_conditioned_with_st",
+        "mean_teacher_forced_loss_assistant_conditioned_without_st",
+        "mean_teacher_forced_loss_assistant_conditioned_with_st",
         "mean_generation_cosine_similarity",
         "exact_match_rate",
         "mean_repetition_score",
-        "mean_generated_text_loss_user_conditioned",
-        "mean_generated_text_loss_assistant_conditioned",
+        "mean_generated_text_loss_user_conditioned_without_st",
+        "mean_generated_text_loss_user_conditioned_with_st",
+        "mean_generated_text_loss_assistant_conditioned_without_st",
+        "mean_generated_text_loss_assistant_conditioned_with_st",
     ]
 
     for control_name in control_bucket_names:
@@ -1152,9 +1578,11 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
         print(
             f"[eval] bucket={bucket_name} "
             f"| n_used={bucket_result['n_examples_used']} "
-            f"| train_aligned_loss={bucket_result['mean_teacher_forced_loss_train_aligned']:.6f} "
-            f"| user_loss={bucket_result['mean_teacher_forced_loss_user_conditioned']:.6f} "
-            f"| assistant_loss={bucket_result['mean_teacher_forced_loss_assistant_conditioned']:.6f} "
+            f"| train_aligned={bucket_result['mean_teacher_forced_loss_train_aligned']:.6f} "
+            f"| user_no_st={bucket_result['mean_teacher_forced_loss_user_conditioned_without_st']:.6f} "
+            f"| user_with_st={bucket_result['mean_teacher_forced_loss_user_conditioned_with_st']:.6f} "
+            f"| assistant_no_st={bucket_result['mean_teacher_forced_loss_assistant_conditioned_without_st']:.6f} "
+            f"| assistant_with_st={bucket_result['mean_teacher_forced_loss_assistant_conditioned_with_st']:.6f} "
             f"| cosine={bucket_result['mean_generation_cosine_similarity']:.6f} "
             f"| exact_match={bucket_result['exact_match_rate']:.6f} "
             f"| repetition={bucket_result['mean_repetition_score']:.6f}"
@@ -1178,14 +1606,21 @@ def run_evaluation(config: EvalConfig) -> Dict[str, Any]:
                 "n_examples_raw": bucket_result["n_examples_raw"],
                 "n_examples_used": bucket_result["n_examples_used"],
                 "n_examples_dropped": bucket_result["n_examples_dropped"],
+
                 "mean_teacher_forced_loss_train_aligned": bucket_result["mean_teacher_forced_loss_train_aligned"],
-                "mean_teacher_forced_loss_user_conditioned": bucket_result["mean_teacher_forced_loss_user_conditioned"],
-                "mean_teacher_forced_loss_assistant_conditioned": bucket_result["mean_teacher_forced_loss_assistant_conditioned"],
+                "mean_teacher_forced_loss_user_conditioned_without_st": bucket_result["mean_teacher_forced_loss_user_conditioned_without_st"],
+                "mean_teacher_forced_loss_user_conditioned_with_st": bucket_result["mean_teacher_forced_loss_user_conditioned_with_st"],
+                "mean_teacher_forced_loss_assistant_conditioned_without_st": bucket_result["mean_teacher_forced_loss_assistant_conditioned_without_st"],
+                "mean_teacher_forced_loss_assistant_conditioned_with_st": bucket_result["mean_teacher_forced_loss_assistant_conditioned_with_st"],
+
                 "mean_generation_cosine_similarity": bucket_result["mean_generation_cosine_similarity"],
                 "exact_match_rate": bucket_result["exact_match_rate"],
                 "mean_repetition_score": bucket_result["mean_repetition_score"],
-                "mean_generated_text_loss_user_conditioned": bucket_result["mean_generated_text_loss_user_conditioned"],
-                "mean_generated_text_loss_assistant_conditioned": bucket_result["mean_generated_text_loss_assistant_conditioned"],
+
+                "mean_generated_text_loss_user_conditioned_without_st": bucket_result["mean_generated_text_loss_user_conditioned_without_st"],
+                "mean_generated_text_loss_user_conditioned_with_st": bucket_result["mean_generated_text_loss_user_conditioned_with_st"],
+                "mean_generated_text_loss_assistant_conditioned_without_st": bucket_result["mean_generated_text_loss_assistant_conditioned_without_st"],
+                "mean_generated_text_loss_assistant_conditioned_with_st": bucket_result["mean_generated_text_loss_assistant_conditioned_with_st"],
             }
             for bucket_name, bucket_result in bucket_results.items()
         },
@@ -1223,7 +1658,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--generation_max_new_tokens", type=int, default=128)
     parser.add_argument("--do_sample", action="store_true")
-    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top_p", type=float, default=1.0)
 
     parser.add_argument(
