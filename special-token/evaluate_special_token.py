@@ -49,6 +49,9 @@ class EvalConfig:
     use_fp16: bool = False
     use_bf16: bool = False
 
+    # generation system prompt
+    generation_use_llm1_system_prompt: bool = False
+
     # saving
     save_per_example: bool = False
 
@@ -1108,6 +1111,9 @@ def evaluate_one_example(
     eval_config: EvalConfig,
     device: torch.device,
 ) -> Dict[str, Any]:
+    # Determine which system_text to use for generation.
+    # When generation_use_llm1_system_prompt is True we use system_llm1;
+    # otherwise we fall back to the train-aligned (empty) system text.
     system_llm1, system_llm2 = get_system_prompts_for_example(
         example=example,
         transcript_lookup=transcript_lookup,
@@ -1235,14 +1241,27 @@ def evaluate_one_example(
     )
 
     # --- generation quality ---
+    if eval_config.generation_use_llm1_system_prompt:
+        generation_system_text = system_llm1
+        generation_context_text = prompt_parts_train_aligned["context_text"]
+        generation_special_text = prompt_parts_train_aligned["special_text"]
+        generation_target_prefix_text = prompt_parts_train_aligned["target_prefix_text"]
+        generation_token_placement = prompt_parts_train_aligned["token_placement"]
+    else:
+        generation_system_text = prompt_parts_train_aligned["system_text"]
+        generation_context_text = prompt_parts_train_aligned["context_text"]
+        generation_special_text = prompt_parts_train_aligned["special_text"]
+        generation_target_prefix_text = prompt_parts_train_aligned["target_prefix_text"]
+        generation_token_placement = prompt_parts_train_aligned["token_placement"]
+
     generated_text = generate_from_parts(
         model=model,
         tokenizer=tokenizer,
-        system_text=prompt_parts_train_aligned["system_text"],
-        context_text=prompt_parts_train_aligned["context_text"],
-        special_text=prompt_parts_train_aligned["special_text"],
-        target_prefix_text=prompt_parts_train_aligned["target_prefix_text"],
-        token_placement=prompt_parts_train_aligned["token_placement"],
+        system_text=generation_system_text,
+        context_text=generation_context_text,
+        special_text=generation_special_text,
+        target_prefix_text=generation_target_prefix_text,
+        token_placement=generation_token_placement,
         position_mode=position_mode,
         special_token_ids=special_token_ids,
         generation_max_new_tokens=eval_config.generation_max_new_tokens,
@@ -1674,6 +1693,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use_fp16", action="store_true")
     parser.add_argument("--use_bf16", action="store_true")
     parser.add_argument("--save_per_example", action="store_true")
+    parser.add_argument(
+        "--generation_use_llm1_system_prompt",
+        action="store_true",
+        help="If set, use system_llm1 as the system prompt during generation instead of the train-aligned (empty) system text.",
+    )
 
     return parser.parse_args()
 
@@ -1715,6 +1739,7 @@ def main() -> None:
         use_fp16=args.use_fp16,
         use_bf16=args.use_bf16,
         save_per_example=args.save_per_example,
+        generation_use_llm1_system_prompt=args.generation_use_llm1_system_prompt,
     )
 
     print("=" * 80)
