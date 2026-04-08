@@ -43,6 +43,7 @@ def build_python_command(
     token_placement: str,
     position_mode: str,
     default_chat_template: bool,
+    generate_as_assistant: bool,
     use_examples_percentage: float,
     model_name: str,
     max_length: int,
@@ -87,6 +88,9 @@ def build_python_command(
 
     if default_chat_template:
         cmd.append("--default_chat_template")
+
+    if generate_as_assistant:
+        cmd.append("--generate_as_assistant")
 
     if save_per_epoch:
         cmd.append("--save_per_epoch")
@@ -160,6 +164,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Whether to use the default chat template (with system/assistant/user roles) or a simplified template."
     )
+    parser.add_argument("--generate_as_assistant", action="store_true")
     parser.add_argument(
         "--use_examples_percentage",
         type=float,
@@ -215,6 +220,7 @@ def main() -> None:
     macro_buckets = list(itertools.product(personas, styles, topics))
 
     nonbaseline_micro_configs = []
+    # NOTE: Commented for just baseline run
     for num_special_tokens in args.token_counts:
         if num_special_tokens <= 0:
             raise ValueError("token_counts should contain only positive values. Baseline is handled separately.")
@@ -279,6 +285,7 @@ def main() -> None:
         "token_placements": args.token_placements,
         "position_modes": args.position_modes,
         "default_chat_template": args.default_chat_template,
+        "generate_as_assistant": args.generate_as_assistant,
         "use_examples_percentage": args.use_examples_percentage,
         "model_name": args.model_name,
         "max_length": args.max_length,
@@ -339,6 +346,7 @@ def main() -> None:
             token_placement=run_cfg["token_placement"],
             position_mode=run_cfg["position_mode"],
             default_chat_template=args.default_chat_template,
+            generate_as_assistant=args.generate_as_assistant,
             use_examples_percentage=run_cfg["use_examples_percentage"],
             model_name=args.model_name,
             max_length=args.max_length,

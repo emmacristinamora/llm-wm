@@ -9,6 +9,7 @@ import random
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import os
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -40,6 +41,7 @@ class TrainConfig:
     token_placement: str = "after_context"      # before_context | after_context
     position_mode: str = "default"              # default | shared_position
     default_chat_template: bool = True
+    generate_as_assistant: bool = False
     use_examples_percentage: float = 1.0
 
     # model / optimization
@@ -112,6 +114,7 @@ def build_run_name(config: TrainConfig) -> str:
         f"__{config.position_mode}"
         f"__{'template' if config.default_chat_template else 'notemplate'}"
         f"__useexamples{int(config.use_examples_percentage * 100)}"
+        f"{'__asst' if config.generate_as_assistant else ''}"
     #    f"__{timestamp}"
     )
 
@@ -205,8 +208,22 @@ def build_leave_one_topic_out_split(
 
 # === PROMPT / FORMATTING HELPERS ===
 
-def format_message(role: str, content: str, default_chat_template: bool) -> str:
+MAX_TARGET_MESSAGE_INDEX = 58
+
+
+def select_max_context_examples(
+    examples: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Select examples with the maximum target_message_index (58) — one per topic."""
+    return [ex for ex in examples if ex["target_message_index"] == MAX_TARGET_MESSAGE_INDEX]
+
+
+def format_message(role: str, content: str, default_chat_template: bool, generate_as_assistant: bool = False) -> str:
     role = role.lower().strip()
+
+    # Swap user↔assistant roles when generating as assistant (system untouched)
+    if generate_as_assistant and role in ("user", "assistant"):
+        role = "assistant" if role == "user" else "user"
 
     if role == "system":
         prefix = "<|im_start|>system\n" if default_chat_template else "System"
@@ -220,13 +237,13 @@ def format_message(role: str, content: str, default_chat_template: bool) -> str:
     return f"{prefix}{content}<|im_end|>" if default_chat_template else f"{prefix}: {content.strip()}"
 
 
-def render_context_messages(messages: List[Dict[str, str]], default_chat_template: bool) -> str:
+def render_context_messages(messages: List[Dict[str, str]], default_chat_template: bool, generate_as_assistant: bool = False) -> str:
     rendered = []
 
     for message in messages:
         role = message["role"]
         content = message["content"]
-        rendered.append(format_message(role=role, content=content, default_chat_template=default_chat_template))
+        rendered.append(format_message(role=role, content=content, default_chat_template=default_chat_template, generate_as_assistant=generate_as_assistant))
 
     return "\n".join(rendered).strip()
 
@@ -245,9 +262,10 @@ def build_prompt_text(
     example: Dict[str, Any],
     special_tokens: List[str],
     token_placement: str,
-    default_chat_template: bool
+    default_chat_template: bool,
+    generate_as_assistant: bool = False,
 ) -> str:
-    context_text = render_context_messages(example["context_messages"], default_chat_template=default_chat_template)
+    context_text = render_context_messages(example["context_messages"], default_chat_template=default_chat_template, generate_as_assistant=generate_as_assistant)
     special_text = "".join(special_tokens)
 
     if len(special_tokens) == 0:
@@ -260,7 +278,12 @@ def build_prompt_text(
         else:
             raise ValueError(f"Unsupported token_placement: {token_placement}")
 
-    prompt_text = f"{conditioned_context}<|im_start|>user\n" if default_chat_template else f"{conditioned_context}User:"
+    if generate_as_assistant:
+        target_prefix = "<|im_start|>assistant\n" if default_chat_template else "Assistant:"
+    else:
+        target_prefix = "<|im_start|>user\n" if default_chat_template else "User:"
+
+    prompt_text = f"{conditioned_context}{target_prefix}"
     return prompt_text
 
 
@@ -268,13 +291,15 @@ def build_full_text(
     example: Dict[str, Any],
     special_tokens: List[str],
     token_placement: str,
-    default_chat_template: bool
+    default_chat_template: bool,
+    generate_as_assistant: bool = False,
 ) -> str:
     prompt_text = build_prompt_text(
         example=example,
         special_tokens=special_tokens,
         token_placement=token_placement,
-        default_chat_template=default_chat_template
+        default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     target_text = example["target_message"].strip()
@@ -292,7 +317,8 @@ def build_training_example_tensors(
     special_tokens: List[str],
     token_placement: str,
     max_length: int,
-    default_chat_template: bool
+    default_chat_template: bool,
+    generate_as_assistant: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Build one supervised example while preserving the target under truncation.
@@ -307,7 +333,8 @@ def build_training_example_tensors(
         example=example,
         special_tokens=special_tokens,
         token_placement=token_placement,
-        default_chat_template=default_chat_template
+        default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     target_text =  example["target_message"].strip()
@@ -371,7 +398,7 @@ class NextUserTurnDataset(Dataset):
         max_length: int,
         default_chat_template: bool,
         use_examples_percentage: float,
-        
+        generate_as_assistant: bool = False,
     ):
         self.tokenizer = tokenizer
         self.special_tokens = special_tokens
@@ -391,7 +418,8 @@ class NextUserTurnDataset(Dataset):
                 special_tokens=special_tokens,
                 token_placement=token_placement,
                 max_length=max_length,
-                default_chat_template=default_chat_template
+                default_chat_template=default_chat_template,
+                generate_as_assistant=generate_as_assistant,
             )
             if item is None:
                 dropped_examples += 1
@@ -695,6 +723,160 @@ def run_validation_loss(
     return total_loss / max(total_examples, 1)
 
 
+def find_subsequence_starts(sequence: torch.Tensor, pattern: torch.Tensor) -> List[int]:
+    """Find all start indices where pattern occurs in a 1D sequence tensor."""
+    seq_len = sequence.shape[0]
+    pat_len = pattern.shape[0]
+    starts = []
+    for i in range(seq_len - pat_len + 1):
+        if torch.equal(sequence[i:i + pat_len], pattern):
+            starts.append(i)
+    return starts
+
+
+def find_persona_turn_token_indices(
+    input_ids: torch.Tensor,
+    tokenizer,
+    prompt_end_idx: int,
+) -> List[int]:
+    """
+    Find all token indices belonging to assistant message content in the prompt.
+
+    Scans for <|im_start|>assistant\\n ... <|im_end|> spans and returns
+    the content token indices (excluding the markers themselves).
+    """
+    # Tokenize markers
+    start_marker_ids = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
+    end_marker_ids = tokenizer.encode("<|im_end|>", add_special_tokens=False)
+
+    start_marker = torch.tensor(start_marker_ids, dtype=input_ids.dtype)
+    end_marker = torch.tensor(end_marker_ids, dtype=input_ids.dtype)
+
+    prompt_ids = input_ids[:prompt_end_idx]
+
+    # Find all assistant turn starts
+    start_positions = find_subsequence_starts(prompt_ids, start_marker)
+
+    persona_indices = []
+    for start_pos in start_positions:
+        content_start = start_pos + len(start_marker_ids)
+        # Find the next <|im_end|> after content_start
+        end_positions = find_subsequence_starts(prompt_ids[content_start:], end_marker)
+        if end_positions:
+            content_end = content_start + end_positions[0]
+            persona_indices.extend(range(content_start, content_end))
+
+    return persona_indices
+
+
+@torch.no_grad()
+def record_residual_activations(
+    model,
+    tokenizer,
+    examples: List[Dict[str, Any]],
+    special_tokens: List[str],
+    token_placement: str,
+    max_length: int,
+    default_chat_template: bool,
+    generate_as_assistant: bool,
+    position_mode: str,
+    special_token_ids: List[int],
+    device: torch.device,
+) -> List[Dict[str, Any]]:
+    """
+    Record per-layer residual stream activations for a list of examples.
+
+    For each example, runs a forward pass with output_hidden_states=True
+    and extracts hidden states at key token positions:
+      - last_context_token: last token before target prefix
+      - first_target_token: first supervised token
+      - last_target_token: final supervised token
+
+    Returns list of dicts, each containing:
+      - metadata: persona, style, topic, target_message_index, etc.
+      - positions: dict mapping position_name -> token index
+      - residuals: dict mapping position_name -> tensor of shape [num_layers+1, hidden_dim]
+        (layer 0 = embedding output, layers 1..36 = post-transformer-block)
+    """
+    model.eval()
+    records = []
+
+    for example in examples:
+        item = build_training_example_tensors(
+            tokenizer=tokenizer,
+            example=example,
+            special_tokens=special_tokens,
+            token_placement=token_placement,
+            max_length=max_length,
+            default_chat_template=default_chat_template,
+            generate_as_assistant=generate_as_assistant,
+        )
+        if item is None:
+            continue
+
+        input_ids = item["input_ids"].unsqueeze(0).to(device)
+        attention_mask = item["attention_mask"].unsqueeze(0).to(device)
+        labels = item["labels"]  # keep on CPU for position computation
+
+        forward_kwargs = build_forward_kwargs(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=None,
+            position_mode=position_mode,
+            special_token_ids=special_token_ids,
+        )
+        forward_kwargs["output_hidden_states"] = True
+
+        outputs = model(**forward_kwargs)
+
+        # outputs.hidden_states: tuple of (num_layers+1) tensors, each [1, seq_len, hidden_dim]
+        supervised_mask = (labels != -100)
+        supervised_indices = supervised_mask.nonzero(as_tuple=True)[0]
+
+        if len(supervised_indices) == 0:
+            continue
+
+        first_target_idx = supervised_indices[0].item()
+        last_target_idx = supervised_indices[-1].item()
+        last_context_idx = max(first_target_idx - 1, 0)
+
+        positions = {
+            "last_context_token": last_context_idx,
+            "first_target_token": first_target_idx,
+            "last_target_token": last_target_idx,
+        }
+
+        residuals = {}
+        for pos_name, pos_idx in positions.items():
+            residuals[pos_name] = torch.stack(
+                [hs[0, pos_idx, :].cpu() for hs in outputs.hidden_states],
+                dim=0,
+            )
+
+        # Mean activation over all persona turn tokens in the prompt
+        persona_indices = find_persona_turn_token_indices(
+            input_ids=item["input_ids"],
+            tokenizer=tokenizer,
+            prompt_end_idx=first_target_idx,
+        )
+
+        if len(persona_indices) > 0:
+            idx_tensor = torch.tensor(persona_indices, dtype=torch.long)
+            residuals["mean_persona_turns"] = torch.stack(
+                [hs[0, idx_tensor, :].mean(dim=0).cpu() for hs in outputs.hidden_states],
+                dim=0,
+            )
+            positions["persona_turn_token_count"] = len(persona_indices)
+
+        records.append({
+            "metadata": item["metadata"],
+            "positions": positions,
+            "residuals": residuals,
+        })
+
+    return records
+
+
 def build_optimizer(
     model,
     config: TrainConfig,
@@ -912,6 +1094,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         max_length=config.max_length,
         default_chat_template=config.default_chat_template,
         use_examples_percentage=config.use_examples_percentage,
+        generate_as_assistant=config.generate_as_assistant,
     )
     val_dataset = NextUserTurnDataset(
         examples=val_examples,
@@ -921,6 +1104,7 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
         max_length=config.max_length,
         default_chat_template=config.default_chat_template,
         use_examples_percentage=1.0,
+        generate_as_assistant=config.generate_as_assistant,
     )
 
     if len(train_dataset) == 0:
@@ -955,6 +1139,27 @@ def run_training(config: TrainConfig) -> Dict[str, Any]:
 
     if config.num_special_tokens == 0:
         train_history: List[Dict[str, Any]] = []
+
+        # --- Record residual activations for max-context examples (train only) ---
+        max_context_examples = select_max_context_examples(train_examples)
+        print(f"[residuals] Recording activations for {len(max_context_examples)} max-context examples...")
+
+        residual_records = record_residual_activations(
+            model=model,
+            tokenizer=tokenizer,
+            examples=max_context_examples,
+            special_tokens=special_tokens,
+            token_placement=config.token_placement,
+            max_length=config.max_length,
+            default_chat_template=config.default_chat_template,
+            generate_as_assistant=config.generate_as_assistant,
+            position_mode=config.position_mode,
+            special_token_ids=special_token_ids,
+            device=device,
+        )
+
+        torch.save(residual_records, run_dir / "residual_activations.pt")
+        print(f"[residuals] Saved {len(residual_records)} records to {run_dir / 'residual_activations.pt'}")
 
         save_special_token_artifacts(
             run_dir=run_dir,
@@ -1126,6 +1331,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--default_chat_template", action="store_true")
+    parser.add_argument("--generate_as_assistant", action="store_true")
     parser.add_argument("--use_examples_percentage", type=float, default=1.0)
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--max_length", type=int, default=1024)
@@ -1164,6 +1370,7 @@ def main() -> None:
         token_placement=args.token_placement,
         position_mode=args.position_mode,
         default_chat_template=args.default_chat_template,
+        generate_as_assistant=args.generate_as_assistant,
         use_examples_percentage=args.use_examples_percentage,
         model_name=args.model_name,
         max_length=args.max_length,
@@ -1182,6 +1389,8 @@ def main() -> None:
     )
 
     config.run_name = build_run_name(config)
+    run_dir = build_run_dir(config)
+    os.makedirs(run_dir, exist_ok=True)
 
     print("=" * 80)
     print("=== RUNNING SPECIAL TOKEN TRAINING ===")
@@ -1189,7 +1398,6 @@ def main() -> None:
 
     results = run_training(config)
 
-    run_dir = build_run_dir(config)
     save_json(results, run_dir / "result.json")
 
     summary_row = {

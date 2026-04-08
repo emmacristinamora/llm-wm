@@ -36,6 +36,7 @@ class EvalConfig:
     do_sample: bool = False
     temperature: float = 1.0
     top_p: float = 1.0
+    repetition_penalty: float = 1.0
 
     # sentence similarity model
     sentence_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -51,6 +52,9 @@ class EvalConfig:
 
     # generation system prompt
     generation_use_llm1_system_prompt: bool = False
+
+    # role swap: generate target as assistant instead of user
+    generate_as_assistant: bool = False
 
     # saving
     save_per_example: bool = False
@@ -211,9 +215,13 @@ def get_system_prompts_for_example(
 
 # === PROMPT / FORMATTING HELPERS ===
 
-def format_message(role: str, content: str, default_chat_template: bool) -> str:
+def format_message(role: str, content: str, default_chat_template: bool, generate_as_assistant: bool = False) -> str:
     role = role.lower().strip()
     content = content.strip()
+
+    # Swap user↔assistant roles when generating as assistant (system untouched)
+    if generate_as_assistant and role in ("user", "assistant"):
+        role = "assistant" if role == "user" else "user"
 
     if default_chat_template:
         return f"<|im_start|>{role}\n{content}<|im_end|>"
@@ -230,7 +238,7 @@ def format_message(role: str, content: str, default_chat_template: bool) -> str:
     return f"{prefix}: {content}"
 
 
-def render_messages(messages: List[Dict[str, str]], default_chat_template: bool) -> str:
+def render_messages(messages: List[Dict[str, str]], default_chat_template: bool, generate_as_assistant: bool = False) -> str:
     rendered: List[str] = []
 
     for message in messages:
@@ -241,6 +249,7 @@ def render_messages(messages: List[Dict[str, str]], default_chat_template: bool)
                 role=role,
                 content=content,
                 default_chat_template=default_chat_template,
+                generate_as_assistant=generate_as_assistant,
             )
         )
 
@@ -264,8 +273,11 @@ def strip_system_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]
     ]
 
 
-def get_target_prefix(default_chat_template: bool) -> str:
-    return "<|im_start|>user\n" if default_chat_template else "User:"
+def get_target_prefix(default_chat_template: bool, generate_as_assistant: bool = False) -> str:
+    if default_chat_template:
+        return "<|im_start|>assistant\n" if generate_as_assistant else "<|im_start|>user\n"
+    else:
+        return "Assistant:" if generate_as_assistant else "User:"
 
 
 def build_prompt_parts_train_aligned(
@@ -273,17 +285,19 @@ def build_prompt_parts_train_aligned(
     special_tokens: List[str],
     token_placement: str,
     default_chat_template: bool,
+    generate_as_assistant: bool = False,
 ) -> Dict[str, str]:
     context_text = render_messages(
         example["context_messages"],
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     return {
         "system_text": "",
         "context_text": context_text,
         "special_text": "".join(special_tokens),
-        "target_prefix_text": get_target_prefix(default_chat_template),
+        "target_prefix_text": get_target_prefix(default_chat_template, generate_as_assistant),
         "token_placement": token_placement,
     }
 
@@ -295,6 +309,7 @@ def build_prompt_parts_conditioned(
     include_special_tokens: bool,
     token_placement: str,
     default_chat_template: bool,
+    generate_as_assistant: bool = False,
 ) -> Dict[str, str]:
     non_system_context = strip_system_messages(example["context_messages"])
 
@@ -307,13 +322,14 @@ def build_prompt_parts_conditioned(
     context_text = render_messages(
         non_system_context,
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     ) if len(non_system_context) > 0 else ""
 
     return {
         "system_text": system_text,
         "context_text": context_text,
         "special_text": "".join(special_tokens) if include_special_tokens else "",
-        "target_prefix_text": get_target_prefix(default_chat_template),
+        "target_prefix_text": get_target_prefix(default_chat_template, generate_as_assistant),
         "token_placement": token_placement,
     }
 
@@ -1050,6 +1066,7 @@ def generate_from_parts(
     do_sample: bool,
     temperature: float,
     top_p: float,
+    repetition_penalty: float,
     max_length: int,
     device: torch.device,
 ) -> str:
@@ -1076,6 +1093,7 @@ def generate_from_parts(
         "do_sample": do_sample,
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": tokenizer.eos_token_id,
+        "repetition_penalty": repetition_penalty,
     }
 
     if do_sample:
@@ -1119,11 +1137,14 @@ def evaluate_one_example(
         transcript_lookup=transcript_lookup,
     )
 
+    generate_as_assistant = eval_config.generate_as_assistant
+
     prompt_parts_train_aligned = build_prompt_parts_train_aligned(
         example=example,
         special_tokens=special_tokens,
         token_placement=token_placement,
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     prompt_parts_user_without_st = build_prompt_parts_conditioned(
@@ -1133,6 +1154,7 @@ def evaluate_one_example(
         include_special_tokens=False,
         token_placement=token_placement,
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     prompt_parts_user_with_st = build_prompt_parts_conditioned(
@@ -1142,6 +1164,7 @@ def evaluate_one_example(
         include_special_tokens=True,
         token_placement=token_placement,
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     prompt_parts_assistant_without_st = build_prompt_parts_conditioned(
@@ -1151,6 +1174,7 @@ def evaluate_one_example(
         include_special_tokens=False,
         token_placement=token_placement,
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     prompt_parts_assistant_with_st = build_prompt_parts_conditioned(
@@ -1160,6 +1184,7 @@ def evaluate_one_example(
         include_special_tokens=True,
         token_placement=token_placement,
         default_chat_template=default_chat_template,
+        generate_as_assistant=generate_as_assistant,
     )
 
     gold_text = str(example["target_message"]).strip()
@@ -1268,6 +1293,7 @@ def evaluate_one_example(
         do_sample=eval_config.do_sample,
         temperature=eval_config.temperature,
         top_p=eval_config.top_p,
+        repetition_penalty=eval_config.repetition_penalty,
         max_length=eval_config.max_length,
         device=device,
     )
@@ -1679,6 +1705,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--do_sample", action="store_true")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top_p", type=float, default=1.0)
+    parser.add_argument("--repetition_penalty", type=float, default=1.0)
 
     parser.add_argument(
         "--sentence_model_name",
@@ -1698,6 +1725,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If set, use system_llm1 as the system prompt during generation instead of the train-aligned (empty) system text.",
     )
+    parser.add_argument("--generate_as_assistant", action="store_true")
 
     return parser.parse_args()
 
@@ -1732,6 +1760,7 @@ def main() -> None:
         do_sample=args.do_sample,
         temperature=args.temperature,
         top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
         sentence_model_name=args.sentence_model_name,
         max_length=args.max_length,
         max_examples_per_bucket=args.max_examples_per_bucket,
@@ -1740,6 +1769,7 @@ def main() -> None:
         use_bf16=args.use_bf16,
         save_per_example=args.save_per_example,
         generation_use_llm1_system_prompt=args.generation_use_llm1_system_prompt,
+        generate_as_assistant=args.generate_as_assistant,
     )
 
     print("=" * 80)
